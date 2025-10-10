@@ -7,7 +7,7 @@ services:
   # ============================================================================
   traefik:
     image: traefik:v3.0
-    container_name: omnisight-traefik-gateway
+    container_name: ${COMPOSE_PROJECT_NAME}-traefik-gateway
     command:
       - "--configfile=/etc/traefik/traefik.yml"
     ports:
@@ -27,16 +27,12 @@ services:
       - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
       - "traefik.http.routers.traefik-dashboard.tls=true"
-      # Middleware สำหรับ basic auth ของ dashboard (ควรเปลี่ยนเป็นระบบยืนยันตัวตนจริงใน production)
-      - "traefik.http.routers.traefik-dashboard.middlewares=auth"
-      - "traefik.http.middlewares.auth.basicauth.users=admin:$$apr1$$q8eZFHjF$$Fj9UfkVvG83I0oPS59PGr." # user: admin, pass: password
-
   # ============================================================================
   # 2. แพลตฟอร์มหลักและ SECRETS (HASHICORP STACK)
   # ============================================================================
   vault:
     image: hashicorp/vault:1.17
-    container_name: omnisight-vault
+    container_name: ${COMPOSE_PROJECT_NAME}-vault
     ports:
       - "8200:8200" # เปิดเพื่อให้เข้าถึงผ่าน CLI โดยตรงได้หากต้องการ
     environment:
@@ -55,7 +51,7 @@ services:
 
   consul:
     image: hashicorp/consul:1.19
-    container_name: omnisight-consul
+    container_name: ${COMPOSE_PROJECT_NAME}-consul
     command: "agent -dev -client=0.0.0.0 -ui"
     networks:
       - satang-dev-net
@@ -68,7 +64,7 @@ services:
 
   nomad:
     image: hashicorp/nomad:1.8
-    container_name: omnisight-nomad
+    container_name: ${COMPOSE_PROJECT_NAME}-nomad
     command: "agent -dev -bind 0.0.0.0"
     networks:
       - satang-dev-net
@@ -84,7 +80,7 @@ services:
   # ============================================================================
   postgres:
     image: postgres:16
-    container_name: omnisight-postgres
+    container_name: ${COMPOSE_PROJECT_NAME}-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -102,7 +98,7 @@ services:
 
   adminer:
     image: adminer:latest
-    container_name: omnisight-adminer
+    container_name: ${COMPOSE_PROJECT_NAME}-adminer
     environment:
       ADMINER_DEFAULT_SERVER: postgres
     networks:
@@ -119,7 +115,7 @@ services:
 
   minio:
     image: minio/minio:latest
-    container_name: omnisight-minio
+    container_name: ${COMPOSE_PROJECT_NAME}-minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
@@ -147,7 +143,7 @@ services:
   # ============================================================================
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.14.1
-    container_name: omnisight-mlflow
+    container_name: ${COMPOSE_PROJECT_NAME}-mlflow
     command: >
       mlflow server
       --host 0.0.0.0
@@ -174,7 +170,7 @@ services:
 
   prefect:
     image: prefecthq/prefect:2-latest
-    container_name: omnisight-prefect
+    container_name: ${COMPOSE_PROJECT_NAME}-prefect
     command: prefect server start
     environment:
       - PREFECT_UI_URL=https://prefect.${DOMAIN}
@@ -194,7 +190,7 @@ services:
 
   label-studio:
     image: heartexlabs/label-studio:latest
-    container_name: omnisight-label-studio
+    container_name: ${COMPOSE_PROJECT_NAME}-label-studio
     environment:
       - LABEL_STUDIO_HOST=https://label-studio.${DOMAIN}
       - MINIO_ENDPOINT=http://minio:9000
@@ -215,7 +211,7 @@ services:
   
   n8n:
     image: n8nio/n8n:latest
-    container_name: omnisight-n8n
+    container_name: ${COMPOSE_PROJECT_NAME}-n8n
     environment:
       - N8N_HOST=n8n.${DOMAIN}
       - N8N_PROTOCOL=https
@@ -234,7 +230,7 @@ services:
 
   jenkins:
     image: jenkins/jenkins:lts-jdk17
-    container_name: omnisight-jenkins
+    container_name: ${COMPOSE_PROJECT_NAME}-jenkins
     environment:
       - JENKINS_USER=${JENKINS_ADMIN_USER}
       - JENKINS_PASS=${JENKINS_ADMIN_PASSWORD}
@@ -255,7 +251,7 @@ services:
   # ============================================================================
   api-gateway:
     image: nginxdemos/hello:plain-text
-    container_name: omnisight-api-gateway
+    container_name: ${COMPOSE_PROJECT_NAME}-api-gateway
     networks:
       - satang-dev-net
     labels:
@@ -267,7 +263,7 @@ services:
 
   ml-service:
     image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ FastAPI service ของคุณ
-    container_name: omnisight-ml-service
+    container_name: ${COMPOSE_PROJECT_NAME}-ml-service
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - MINIO_ENDPOINT=minio:9000
@@ -289,7 +285,7 @@ services:
   
   frontend:
     image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ Next.js service ของคุณ
-    container_name: omnisight-frontend
+    container_name: ${COMPOSE_PROJECT_NAME}-frontend
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
     networks:
@@ -306,7 +302,7 @@ services:
   # ============================================================================
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.95.0
-    container_name: omnisight-otel-collector
+    container_name: ${COMPOSE_PROJECT_NAME}-otel-collector
     command: ["--config=/etc/otel-collector-config.yml"]
     volumes:
       - ./infra/opentelemetry/otel-collector-config.yml:/etc/otel-collector-config.yml
@@ -315,7 +311,7 @@ services:
 
   jaeger:
     image: jaegertracing/all-in-one:1.53
-    container_name: omnisight-jaeger
+    container_name: ${COMPOSE_PROJECT_NAME}-jaeger
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     networks:
@@ -339,12 +335,12 @@ networks:
 
 volumes:
   postgres-data:
-    name: omnisight-postgres-data
+    name: ${COMPOSE_PROJECT_NAME}-postgres-data
   minio-data:
-    name: omnisight-minio-data
+    name: ${COMPOSE_PROJECT_NAME}-minio-data
   label-studio-data:
-    name: omnisight-label-studio-data
+    name: ${COMPOSE_PROJECT_NAME}-label-studio-data
   n8n-data:
-    name: omnisight-n8n-data
+    name: ${COMPOSE_PROJECT_NAME}-n8n-data
   jenkins-data:
-    name: omnisight-jenkins-data
+    name: ${COMPOSE_PROJECT_NAME}-jenkins-data
