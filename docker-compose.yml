@@ -1,0 +1,350 @@
+# docker-compose.yml
+version: '3.9'
+
+services:
+  # ============================================================================
+  # 1. GATEWAY และ SERVICE MESH
+  # ============================================================================
+  traefik:
+    image: traefik:v3.0
+    container_name: omnisight-traefik-gateway
+    command:
+      - "--configfile=/etc/traefik/traefik.yml"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./infra/traefik/certs:/etc/traefik/certs:ro
+    networks:
+      - satang-dev-net
+    labels:
+      # เปิดใช้งานให้ Traefik จัดการตัวเอง
+      - "traefik.enable=true"
+      # Dashboard Router (แบบปลอดภัย)
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      # Middleware สำหรับ basic auth ของ dashboard (ควรเปลี่ยนเป็นระบบยืนยันตัวตนจริงใน production)
+      - "traefik.http.routers.traefik-dashboard.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=admin:$$apr1$$q8eZFHjF$$Fj9UfkVvG83I0oPS59PGr." # user: admin, pass: password
+
+  # ============================================================================
+  # 2. แพลตฟอร์มหลักและ SECRETS (HASHICORP STACK)
+  # ============================================================================
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: omnisight-vault
+    ports:
+      - "8200:8200" # เปิดเพื่อให้เข้าถึงผ่าน CLI โดยตรงได้หากต้องการ
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=${VAULT_DEV_ROOT_TOKEN_ID}
+      - VAULT_ADDR=http://127.0.0.1:8200
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - satang-dev-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vault.rule=Host(`vault.${DOMAIN}`)"
+      - "traefik.http.routers.vault.entrypoints=websecure"
+      - "traefik.http.routers.vault.tls=true"
+      - "traefik.http.services.vault.loadbalancer.server.port=8200"
+
+  consul:
+    image: hashicorp/consul:1.19
+    container_name: omnisight-consul
+    command: "agent -dev -client=0.0.0.0 -ui"
+    networks:
+      - satang-dev-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.consul.rule=Host(`consul.${DOMAIN}`)"
+      - "traefik.http.routers.consul.entrypoints=websecure"
+      - "traefik.http.routers.consul.tls=true"
+      - "traefik.http.services.consul.loadbalancer.server.port=8500"
+
+  nomad:
+    image: hashicorp/nomad:1.8
+    container_name: omnisight-nomad
+    command: "agent -dev -bind 0.0.0.0"
+    networks:
+      - satang-dev-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nomad.rule=Host(`nomad.${DOMAIN}`)"
+      - "traefik.http.routers.nomad.entrypoints=websecure"
+      - "traefik.http.routers.nomad.tls=true"
+      - "traefik.http.services.nomad.loadbalancer.server.port=4646"
+
+  # ============================================================================
+  # 3. ส่วนจัดเก็บข้อมูล (DATA PERSISTENCE LAYER)
+  # ============================================================================
+  postgres:
+    image: postgres:16
+    container_name: omnisight-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d
+    networks:
+      - satang-dev-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  adminer:
+    image: adminer:latest
+    container_name: omnisight-adminer
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    networks:
+      - satang-dev-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.rule=Host(`adminer.${DOMAIN}`)"
+      - "traefik.http.routers.adminer.entrypoints=websecure"
+      - "traefik.http.routers.adminer.tls=true"
+      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+
+  minio:
+    image: minio/minio:latest
+    container_name: omnisight-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS}
+    volumes:
+      - minio-data:/data
+    networks:
+      - satang-dev-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "traefik.enable=true"
+      # Router สำหรับ Web UI Console
+      - "traefik.http.routers.minio-console.rule=Host(`minio.${DOMAIN}`)"
+      - "traefik.http.routers.minio-console.entrypoints=websecure"
+      - "traefik.http.routers.minio-console.tls=true"
+      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+
+  # ============================================================================
+  # 4. ส่วน MLOPS และ AUTOMATION
+  # ============================================================================
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.14.1
+    container_name: omnisight-mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      --default-artifact-root s3://${MINIO_DEFAULT_BUCKETS}/mlflow/
+    environment:
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+    networks:
+      - satang-dev-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mlflow.rule=Host(`mlflow.${DOMAIN}`)"
+      - "traefik.http.routers.mlflow.entrypoints=websecure"
+      - "traefik.http.routers.mlflow.tls=true"
+      - "traefik.http.services.mlflow.loadbalancer.server.port=5000"
+
+  prefect:
+    image: prefecthq/prefect:2-latest
+    container_name: omnisight-prefect
+    command: prefect server start
+    environment:
+      - PREFECT_UI_URL=https://prefect.${DOMAIN}
+      - PREFECT_API_URL=https://prefect.${DOMAIN}/api
+      - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    networks:
+      - satang-dev-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prefect.rule=Host(`prefect.${DOMAIN}`)"
+      - "traefik.http.routers.prefect.entrypoints=websecure"
+      - "traefik.http.routers.prefect.tls=true"
+      - "traefik.http.services.prefect.loadbalancer.server.port=4200"
+
+  label-studio:
+    image: heartexlabs/label-studio:latest
+    container_name: omnisight-label-studio
+    environment:
+      - LABEL_STUDIO_HOST=https://label-studio.${DOMAIN}
+      - MINIO_ENDPOINT=http://minio:9000
+      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - label-studio-data:/label-studio/data
+    networks:
+      - satang-dev-net
+    depends_on:
+      - minio
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.label-studio.rule=Host(`label-studio.${DOMAIN}`)"
+      - "traefik.http.routers.label-studio.entrypoints=websecure"
+      - "traefik.http.routers.label-studio.tls=true"
+      - "traefik.http.services.label-studio.loadbalancer.server.port=8080"
+  
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: omnisight-n8n
+    environment:
+      - N8N_HOST=n8n.${DOMAIN}
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.${DOMAIN}/
+    volumes:
+      - n8n-data:/home/node/.n8n
+    networks:
+      - satang-dev-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(`n8n.${DOMAIN}`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls=true"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: omnisight-jenkins
+    environment:
+      - JENKINS_USER=${JENKINS_ADMIN_USER}
+      - JENKINS_PASS=${JENKINS_ADMIN_PASSWORD}
+    volumes:
+      - jenkins-data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock # Mount Docker socket เพื่อให้ Jenkins สั่งงาน Docker ได้
+    networks:
+      - satang-dev-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jenkins.rule=Host(`jenkins.${DOMAIN}`)"
+      - "traefik.http.routers.jenkins.entrypoints=websecure"
+      - "traefik.http.routers.jenkins.tls=true"
+      - "traefik.http.services.jenkins.loadbalancer.server.port=8080"
+
+  # ============================================================================
+  # 5. เซอร์วิสของแอปพลิเคชัน (ตัวอย่าง)
+  # ============================================================================
+  api-gateway:
+    image: nginxdemos/hello:plain-text
+    container_name: omnisight-api-gateway
+    networks:
+      - satang-dev-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api-gateway.rule=Host(`api.${DOMAIN}`)"
+      - "traefik.http.routers.api-gateway.entrypoints=websecure"
+      - "traefik.http.routers.api-gateway.tls=true"
+      - "traefik.http.services.api-gateway.loadbalancer.server.port=80"
+
+  ml-service:
+    image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ FastAPI service ของคุณ
+    container_name: omnisight-ml-service
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    networks:
+      - satang-dev-net
+    depends_on:
+      - postgres
+      - minio
+      - mlflow
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ml-service.rule=Host(`ml-api.${DOMAIN}`)"
+      - "traefik.http.routers.ml-service.entrypoints=websecure"
+      - "traefik.http.routers.ml-service.tls=true"
+      - "traefik.http.services.ml-service.loadbalancer.server.port=80"
+  
+  frontend:
+    image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ Next.js service ของคุณ
+    container_name: omnisight-frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+    networks:
+      - satang-dev-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+
+  # ============================================================================
+  # 6. ส่วนตรวจสอบและสังเกตการณ์ (OBSERVABILITY STACK)
+  # ============================================================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.95.0
+    container_name: omnisight-otel-collector
+    command: ["--config=/etc/otel-collector-config.yml"]
+    volumes:
+      - ./infra/opentelemetry/otel-collector-config.yml:/etc/otel-collector-config.yml
+    networks:
+      - satang-dev-net
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.53
+    container_name: omnisight-jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - satang-dev-net
+    depends_on:
+      - otel-collector
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jaeger.rule=Host(`jaeger.${DOMAIN}`)"
+      - "traefik.http.routers.jaeger.entrypoints=websecure"
+      - "traefik.http.routers.jaeger.tls=true"
+      - "traefik.http.services.jaeger.loadbalancer.server.port=16686" # Port ของ Jaeger UI
+
+# ============================================================================
+# การตั้งค่าระดับบนสุด
+# ============================================================================
+networks:
+  satang-dev-net:
+    driver: bridge
+    name: satang-dev-net
+
+volumes:
+  postgres-data:
+    name: omnisight-postgres-data
+  minio-data:
+    name: omnisight-minio-data
+  label-studio-data:
+    name: omnisight-label-studio-data
+  n8n-data:
+    name: omnisight-n8n-data
+  jenkins-data:
+    name: omnisight-jenkins-data
