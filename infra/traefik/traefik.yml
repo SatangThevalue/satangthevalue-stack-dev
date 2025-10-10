@@ -26,7 +26,7 @@ providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false # ต้องเปิดใช้งานเซอร์วิสอย่างชัดเจนผ่าน labels
-    network: omnisight-net # ใช้เน็ตเวิร์กกลางของเรา
+    network: satang-dev-net # ใช้เน็ตเวิร์กกลางของเรา
 
 # ตั้งค่าการบันทึก log
 log:

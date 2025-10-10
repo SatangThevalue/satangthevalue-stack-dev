@@ -65,6 +65,15 @@ services:
   nomad:
     image: hashicorp/nomad:1.8
     container_name: ${COMPOSE_PROJECT_NAME}-nomad
+    privileged: true
+    environment: # <== เพิ่มส่วนนี้
+      - "NOMAD_SKIP_DOCKER_IMAGE_WARN=1"
+    security_opt: # <== เพิ่มบล็อกนี้
+      - "apparmor:unconfined"
+      - "seccomp:unconfined"
+    volumes: # <== เพิ่มบล็อกนี้
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /var/run/docker.sock:/var/run/docker.sock 
     command: "agent -dev -bind 0.0.0.0"
     networks:
       - satang-dev-net
