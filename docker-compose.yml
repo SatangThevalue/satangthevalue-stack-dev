@@ -34,7 +34,7 @@ services:
     image: hashicorp/vault:1.17
     container_name: ${COMPOSE_PROJECT_NAME}-vault
     ports:
-      - "8200:8200" # เปิดเพื่อให้เข้าถึงผ่าน CLI โดยตรงได้หากต้องการ
+      - "8200" # เปิดเพื่อให้เข้าถึงผ่าน CLI โดยตรงได้หากต้องการ
     volumes: # <== เพิ่ม volumes
       - ./infra/vault/config:/vault/config
       - ./infra/vault/policies:/vault/policies
@@ -45,6 +45,11 @@ services:
     command: "server -config=/vault/config/vault-config.hcl"
     networks:
       - satang-dev-net
+    healthcheck: # <== เพิ่มส่วนนี้
+      test: ["CMD", "wget", "--no-verbose", "--spider", "--tries=1", "http://127.0.0.1:8200/v1/sys/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.vault.rule=Host(`vault.${DOMAIN}`)"
@@ -83,6 +88,11 @@ services:
       - ./infra/nomad/config:/nomad/config
       - nomad-data:/nomad/data
     command: "agent -config=/nomad/config/nomad-server.hcl"
+    depends_on: # <== เพิ่มส่วนนี้
+      vault:
+        condition: service_healthy
+      consul:
+        condition: service_started
     networks:
       - satang-dev-net
     labels:
@@ -361,3 +371,5 @@ volumes:
     name: ${COMPOSE_PROJECT_NAME}-n8n-data
   jenkins-data:
     name: ${COMPOSE_PROJECT_NAME}-jenkins-data
+  nomad-data:
+    name: ${COMPOSE_PROJECT_NAME}-nomad-data

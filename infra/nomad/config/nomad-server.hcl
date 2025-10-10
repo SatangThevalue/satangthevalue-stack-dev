@@ -2,6 +2,11 @@
 
 data_dir  = "/nomad/data"
 bind_addr = "0.0.0.0"
+advertise {
+  http = "nomad:4646"
+  rpc  = "nomad:4647"
+  serf = "nomad:4648"
+}
 
 server {
   enabled          = true
@@ -19,5 +24,4 @@ consul {
 vault {
   enabled = true
   address = "http://vault:8200"
-  # token จะถูกส่งเข้ามาผ่าน Environment Variable
 }
