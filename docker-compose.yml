@@ -1,5 +1,5 @@
 # docker-compose.yml
-version: '3.9'
+version: "3.9"
 
 services:
   # ============================================================================
@@ -35,11 +35,14 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME}-vault
     ports:
       - "8200:8200" # เปิดเพื่อให้เข้าถึงผ่าน CLI โดยตรงได้หากต้องการ
+    volumes: # <== เพิ่ม volumes
+      - ./infra/vault/config:/vault/config
+      - ./infra/vault/policies:/vault/policies
     environment:
-      - VAULT_DEV_ROOT_TOKEN_ID=${VAULT_DEV_ROOT_TOKEN_ID}
       - VAULT_ADDR=http://127.0.0.1:8200
     cap_add:
       - IPC_LOCK
+    command: "server -config=/vault/config/vault-config.hcl"
     networks:
       - satang-dev-net
     labels:
@@ -68,13 +71,18 @@ services:
     privileged: true
     environment: # <== เพิ่มส่วนนี้
       - "NOMAD_SKIP_DOCKER_IMAGE_WARN=1"
+      - VAULT_TOKEN=${NOMAD_VAULT_TOKEN}
+    ports: # <== เพิ่ม ports เพื่อให้เข้าถึงได้ง่ายจาก Host
+      - "4646:4646"
     security_opt: # <== เพิ่มบล็อกนี้
       - "apparmor:unconfined"
       - "seccomp:unconfined"
     volumes: # <== เพิ่มบล็อกนี้
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - /var/run/docker.sock:/var/run/docker.sock 
-    command: "agent -dev -bind 0.0.0.0"
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./infra/nomad/config:/nomad/config
+      - nomad-data:/nomad/data
+    command: "agent -config=/nomad/config/nomad-server.hcl"
     networks:
       - satang-dev-net
     labels:
@@ -217,7 +225,7 @@ services:
       - "traefik.http.routers.label-studio.entrypoints=websecure"
       - "traefik.http.routers.label-studio.tls=true"
       - "traefik.http.services.label-studio.loadbalancer.server.port=8080"
-  
+
   n8n:
     image: n8nio/n8n:latest
     container_name: ${COMPOSE_PROJECT_NAME}-n8n
@@ -291,7 +299,7 @@ services:
       - "traefik.http.routers.ml-service.entrypoints=websecure"
       - "traefik.http.routers.ml-service.tls=true"
       - "traefik.http.services.ml-service.loadbalancer.server.port=80"
-  
+
   frontend:
     image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ Next.js service ของคุณ
     container_name: ${COMPOSE_PROJECT_NAME}-frontend
