@@ -1,9 +1,9 @@
 # docker-compose.yml
-version: "3.9"
+version: '3.9'
 
 services:
   # ============================================================================
-  # 1. GATEWAY และ SERVICE MESH
+  # 1. GATEWAY
   # ============================================================================
   traefik:
     image: traefik:v3.0
@@ -18,7 +18,7 @@ services:
       - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./infra/traefik/certs:/etc/traefik/certs:ro
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     labels:
       # เปิดใช้งานให้ Traefik จัดการตัวเอง
       - "traefik.enable=true"
@@ -27,28 +27,35 @@ services:
       - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
       - "traefik.http.routers.traefik-dashboard.service=api@internal"
       - "traefik.http.routers.traefik-dashboard.tls=true"
+
   # ============================================================================
-  # 2. แพลตฟอร์มหลักและ SECRETS (HASHICORP STACK)
+  # 2. การจัดการข้อมูลลับ (SECRETS MANAGEMENT)
   # ============================================================================
   vault:
     image: hashicorp/vault:1.17
     container_name: ${COMPOSE_PROJECT_NAME}-vault
     ports:
-      - "8200" # เปิดเพื่อให้เข้าถึงผ่าน CLI โดยตรงได้หากต้องการ
-    volumes: # <== เพิ่ม volumes
-      - ./infra/vault/config:/vault/config
-      - ./infra/vault/policies:/vault/policies
+      - "8200:8200" # เปิดเพื่อให้เข้าถึงผ่าน CLI โดยตรงได้หากต้องการ
     environment:
+      - VAULT_POSTGRES_USER=${VAULT_POSTGRES_USER}
+      - VAULT_POSTGRES_PASSWORD=${VAULT_POSTGRES_PASSWORD}
+      - VAULT_POSTGRES_DB=${VAULT_POSTGRES_DB}
       - VAULT_ADDR=http://127.0.0.1:8200
     cap_add:
       - IPC_LOCK
+    volumes:
+      - ./infra/vault/config/vault-config.hcl:/vault/config/vault-config.hcl
+      - vault-data:/vault/file
     command: "server -config=/vault/config/vault-config.hcl"
     networks:
-      - satang-dev-net
-    healthcheck: # <== เพิ่มส่วนนี้
-      test: ["CMD", "wget", "--no-verbose", "--spider", "--tries=1", "http://127.0.0.1:8200/v1/sys/health"]
-      interval: 5s
-      timeout: 3s
+      - ${COMPOSE_PROJECT_NAME}-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "vault status -format=json | jq -e '.initialized == true and .sealed == false'"]
+      interval: 10s
+      timeout: 5s
       retries: 5
     labels:
       - "traefik.enable=true"
@@ -56,51 +63,6 @@ services:
       - "traefik.http.routers.vault.entrypoints=websecure"
       - "traefik.http.routers.vault.tls=true"
       - "traefik.http.services.vault.loadbalancer.server.port=8200"
-
-  consul:
-    image: hashicorp/consul:1.19
-    container_name: ${COMPOSE_PROJECT_NAME}-consul
-    command: "agent -dev -client=0.0.0.0 -ui"
-    networks:
-      - satang-dev-net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.consul.rule=Host(`consul.${DOMAIN}`)"
-      - "traefik.http.routers.consul.entrypoints=websecure"
-      - "traefik.http.routers.consul.tls=true"
-      - "traefik.http.services.consul.loadbalancer.server.port=8500"
-
-  nomad:
-    image: hashicorp/nomad:1.8
-    container_name: ${COMPOSE_PROJECT_NAME}-nomad
-    privileged: true
-    environment: # <== เพิ่มส่วนนี้
-      - "NOMAD_SKIP_DOCKER_IMAGE_WARN=1"
-      - VAULT_TOKEN=${NOMAD_VAULT_TOKEN}
-    ports: # <== เพิ่ม ports เพื่อให้เข้าถึงได้ง่ายจาก Host
-      - "4646:4646"
-    security_opt: # <== เพิ่มบล็อกนี้
-      - "apparmor:unconfined"
-      - "seccomp:unconfined"
-    volumes: # <== เพิ่มบล็อกนี้
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./infra/nomad/config:/nomad/config
-      - nomad-data:/nomad/data
-    command: "agent -config=/nomad/config/nomad-server.hcl"
-    depends_on: # <== เพิ่มส่วนนี้
-      vault:
-        condition: service_healthy
-      consul:
-        condition: service_started
-    networks:
-      - satang-dev-net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.nomad.rule=Host(`nomad.${DOMAIN}`)"
-      - "traefik.http.routers.nomad.entrypoints=websecure"
-      - "traefik.http.routers.nomad.tls=true"
-      - "traefik.http.services.nomad.loadbalancer.server.port=4646"
 
   # ============================================================================
   # 3. ส่วนจัดเก็บข้อมูล (DATA PERSISTENCE LAYER)
@@ -112,11 +74,15 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # ส่งค่าของ Vault เข้าไปเพื่อให้สคริปต์ init.sql สามารถสร้าง user/db ได้
+      VAULT_POSTGRES_USER: ${VAULT_POSTGRES_USER}
+      VAULT_POSTGRES_PASSWORD: ${VAULT_POSTGRES_PASSWORD}
+      VAULT_POSTGRES_DB: ${VAULT_POSTGRES_DB}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/initdb:/docker-entrypoint-initdb.d
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -129,7 +95,7 @@ services:
     environment:
       ADMINER_DEFAULT_SERVER: postgres
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     depends_on:
       postgres:
         condition: service_healthy
@@ -151,7 +117,7 @@ services:
     volumes:
       - minio-data:/data
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -182,7 +148,7 @@ services:
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
       - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     depends_on:
       postgres:
         condition: service_healthy
@@ -204,7 +170,7 @@ services:
       - PREFECT_API_URL=https://prefect.${DOMAIN}/api
       - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     depends_on:
       postgres:
         condition: service_healthy
@@ -226,7 +192,7 @@ services:
     volumes:
       - label-studio-data:/label-studio/data
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - minio
     labels:
@@ -235,7 +201,7 @@ services:
       - "traefik.http.routers.label-studio.entrypoints=websecure"
       - "traefik.http.routers.label-studio.tls=true"
       - "traefik.http.services.label-studio.loadbalancer.server.port=8080"
-
+  
   n8n:
     image: n8nio/n8n:latest
     container_name: ${COMPOSE_PROJECT_NAME}-n8n
@@ -247,7 +213,7 @@ services:
     volumes:
       - n8n-data:/home/node/.n8n
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.n8n.rule=Host(`n8n.${DOMAIN}`)"
@@ -265,7 +231,7 @@ services:
       - jenkins-data:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock # Mount Docker socket เพื่อให้ Jenkins สั่งงาน Docker ได้
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.jenkins.rule=Host(`jenkins.${DOMAIN}`)"
@@ -276,53 +242,53 @@ services:
   # ============================================================================
   # 5. เซอร์วิสของแอปพลิเคชัน (ตัวอย่าง)
   # ============================================================================
-  api-gateway:
-    image: nginxdemos/hello:plain-text
-    container_name: ${COMPOSE_PROJECT_NAME}-api-gateway
-    networks:
-      - satang-dev-net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api-gateway.rule=Host(`api.${DOMAIN}`)"
-      - "traefik.http.routers.api-gateway.entrypoints=websecure"
-      - "traefik.http.routers.api-gateway.tls=true"
-      - "traefik.http.services.api-gateway.loadbalancer.server.port=80"
+  #api-gateway:
+  #  image: nginxdemos/hello:plain-text
+  #  container_name: ${COMPOSE_PROJECT_NAME}-api-gateway
+  #  networks:
+  #    - ${COMPOSE_PROJECT_NAME}-net
+  #  labels:
+  #    - "traefik.enable=true"
+  #    - "traefik.http.routers.api-gateway.rule=Host(`api.${DOMAIN}`)"
+  #    - "traefik.http.routers.api-gateway.entrypoints=websecure"
+  #    - "traefik.http.routers.api-gateway.tls=true"
+  #    - "traefik.http.services.api-gateway.loadbalancer.server.port=80"
 
-  ml-service:
-    image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ FastAPI service ของคุณ
-    container_name: ${COMPOSE_PROJECT_NAME}-ml-service
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
-      - MLFLOW_TRACKING_URI=http://mlflow:5000
-    networks:
-      - satang-dev-net
-    depends_on:
-      - postgres
-      - minio
-      - mlflow
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.ml-service.rule=Host(`ml-api.${DOMAIN}`)"
-      - "traefik.http.routers.ml-service.entrypoints=websecure"
-      - "traefik.http.routers.ml-service.tls=true"
-      - "traefik.http.services.ml-service.loadbalancer.server.port=80"
-
-  frontend:
-    image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ Next.js service ของคุณ
-    container_name: ${COMPOSE_PROJECT_NAME}-frontend
-    environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-    networks:
-      - satang-dev-net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN}`)"
-      - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls=true"
-      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+  #ml-service:
+  #  image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ FastAPI service ของคุณ
+  #  container_name: ${COMPOSE_PROJECT_NAME}-ml-service
+  #  environment:
+  #    - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  #    - MINIO_ENDPOINT=minio:9000
+  #    - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
+  #    - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+  #    - MLFLOW_TRACKING_URI=http://mlflow:5000
+  #  networks:
+  #    - ${COMPOSE_PROJECT_NAME}-net
+  #  depends_on:
+  #    - postgres
+  #    - minio
+  #    - mlflow
+  #  labels:
+  #    - "traefik.enable=true"
+  #    - "traefik.http.routers.ml-service.rule=Host(`ml-api.${DOMAIN}`)"
+  #    - "traefik.http.routers.ml-service.entrypoints=websecure"
+  #    - "traefik.http.routers.ml-service.tls=true"
+  #    - "traefik.http.services.ml-service.loadbalancer.server.port=80"
+  
+  #frontend:
+  #  image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ Next.js service ของคุณ
+  #  container_name: ${COMPOSE_PROJECT_NAME}-frontend
+  #  environment:
+  #    - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+  #  networks:
+  #    - ${COMPOSE_PROJECT_NAME}-net
+  #  labels:
+  #    - "traefik.enable=true"
+  #    - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN}`)"
+  #    - "traefik.http.routers.frontend.entrypoints=websecure"
+  #    - "traefik.http.routers.frontend.tls=true"
+  #    - "traefik.http.services.frontend.loadbalancer.server.port=80"
 
   # ============================================================================
   # 6. ส่วนตรวจสอบและสังเกตการณ์ (OBSERVABILITY STACK)
@@ -334,7 +300,7 @@ services:
     volumes:
       - ./infra/opentelemetry/otel-collector-config.yml:/etc/otel-collector-config.yml
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
 
   jaeger:
     image: jaegertracing/all-in-one:1.53
@@ -342,7 +308,7 @@ services:
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     networks:
-      - satang-dev-net
+      - ${COMPOSE_PROJECT_NAME}-net
     depends_on:
       - otel-collector
     labels:
@@ -356,9 +322,9 @@ services:
 # การตั้งค่าระดับบนสุด
 # ============================================================================
 networks:
-  satang-dev-net:
+  ${COMPOSE_PROJECT_NAME}-net:
     driver: bridge
-    name: satang-dev-net
+    name: ${COMPOSE_PROJECT_NAME}-net
 
 volumes:
   postgres-data:
@@ -371,5 +337,3 @@ volumes:
     name: ${COMPOSE_PROJECT_NAME}-n8n-data
   jenkins-data:
     name: ${COMPOSE_PROJECT_NAME}-jenkins-data
-  nomad-data:
-    name: ${COMPOSE_PROJECT_NAME}-nomad-data

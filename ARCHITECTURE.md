@@ -1,46 +1,55 @@
-# System Architecture
-
-สถาปัตยกรรมของ **satangthevalue-stack-dev** ถูกออกแบบมาเพื่อจำลองสภาพแวดล้อมการทำงานจริง (Production) ให้ใกล้เคียงที่สุด โดยยึดหลักการสำคัญดังนี้:
-
-- **Single Entry Point:** ทราฟฟิกทั้งหมดจากภายนอกจะวิ่งผ่าน **Traefik Gateway** เพียงจุดเดียว ซึ่งทำหน้าที่เป็น Reverse Proxy และจัดการ SSL/TLS โดยอัตโนมัติ
-- **Service Discovery:** Traefik สามารถค้นหาและกำหนดเส้นทางไปยังเซอร์วิสใหม่ๆ ที่ถูกเพิ่มเข้ามาใน Docker network ได้เองผ่าน Docker labels
-- **Decoupled Services:** ทุกเซอร์วิสทำงานในคอนเทนเนอร์ของตัวเองและสื่อสารกันผ่านเน็ตเวิร์กภายใน ทำให้ง่ายต่อการบำรุงรักษาและอัปเดตแยกส่วน
-- **Centralized Data:** ข้อมูลสำคัญถูกจัดเก็บไว้ที่ศูนย์กลาง เช่น PostgreSQL สำหรับข้อมูลเชิงสัมพันธ์ และ MinIO สำหรับ Object Storage
-
-## แผนภาพสถาปัตยกรรม (Architecture Diagram)
-
-แผนภาพนี้แสดงให้เห็นถึงการไหลของข้อมูล (Data Flow) และการเชื่อมต่อระหว่างเซอร์วิสต่างๆ ภายในระบบ
-
-```mermaid
 graph TD
-    subgraph "ผู้ใช้งาน (localhost)"
+    subgraph "เครื่องของนักพัฒนา (localhost)"
         direction LR
         User -- "https://*.localhost" --> Traefik;
     end
 
-    subgraph "Docker Network: satang-dev-net"
+    subgraph "Docker Network: omnisight-net"
         direction TB
 
-        Traefik -- "HTTPS" --> App_Frontend["app.localhost (Frontend)"];
-        Traefik -- "HTTPS" --> App_Backend["api.localhost (Backend)"];
-        
-        App_Frontend -- "API Calls" --> App_Backend;
+        Traefik -- "HTTPS" --> App_NextJS["app.localhost (Next.js)"];
+        Traefik -- "HTTPS" --> API_NestJS["api.localhost (Nest.js)"];
+        Traefik -- "HTTPS" --> API_FastAPI["ml-api.localhost (FastAPI)"];
+        Traefik -- "HTTPS" --> MLflow["mlflow.localhost"];
+        Traefik -- "HTTPS" --> Prefect["prefect.localhost"];
+        Traefik -- "HTTPS" --> LabelStudio["label-studio.localhost"];
+        Traefik -- "HTTPS" --> MinIO_UI["minio.localhost (UI)"];
+        Traefik -- "HTTPS" --> Adminer["adminer.localhost"];
+        Traefik -- "HTTPS" --> Jenkins["jenkins.localhost"];
+        Traefik -- "HTTPS" --> Jaeger["jaeger.localhost"];
+        Traefik -- "HTTPS" --> Vault["vault.localhost"];
+        Traefik -- "HTTPS" --> TraefikDashboard["traefik.localhost (Dashboard)"];
 
-        subgraph "MLOps & Automation"
-            MLflow["mlflow.localhost"];
-            Prefect["prefect.localhost"];
-            LabelStudio["label-studio.localhost"];
+        subgraph "ส่วนของแอปพลิเคชัน (Application Stack)"
+            App_NextJS -- "เรียก API" --> API_NestJS;
+            API_NestJS -- "เรียก ML API" --> API_FastAPI;
         end
 
-        subgraph "Data Persistence"
+        subgraph "ส่วน MLOps และ Automation"
+            MLflow -- "Metadata" --> Postgres;
+            MLflow -- "Artifacts (S3)" --> MinIO_API["MinIO (API:9000)"];
+            Prefect -- "ข้อมูล Backend" --> Postgres;
+            LabelStudio -- "ข้อมูลและ Annotation (S3)" --> MinIO_API;
+            Jenkins -- "ควบคุม Docker" --> DockerSocket["/var/run/docker.sock"];
+        end
+
+        subgraph "ส่วนจัดเก็บข้อมูล (Data Persistence)"
             Postgres[("PostgreSQL")];
-            MinIO[("MinIO S3 Storage")];
+            MinIO_API[("MinIO Storage")];
         end
 
-        MLflow -- "Metadata" --> Postgres;
-        MLflow -- "Artifacts" --> MinIO;
-        Prefect -- "Backend Data" --> Postgres;
-        LabelStudio -- "Datasets" --> MinIO;
-        App_Backend -- "Data Access" --> Postgres;
-        App_Backend -- "File Access" --> MinIO;
+        subgraph "ส่วนตรวจสอบและสังเกตการณ์ (Observability)"
+            API_FastAPI -- "Traces (OTLP)" --> OTEL_Collector["OpenTelemetry Collector"];
+            API_NestJS -- "Traces (OTLP)" --> OTEL_Collector;
+            OTEL_Collector -- "ส่งออก Traces" --> Jaeger;
+        end
+
+        subgraph "เซอร์วิสหลักของแพลตฟอร์ม (Platform Services)"
+            Vault;
+        end
+
+        API_FastAPI -- "เรียกข้อมูลจาก DB" --> Postgres;
+        API_FastAPI -- "โหลดโมเดล (S3)" --> MinIO_API;
+        API_FastAPI -- "ดึงข้อมูลลับ" --> Vault;
+
     end

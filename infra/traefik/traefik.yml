@@ -12,12 +12,13 @@ api:
 entryPoints:
   web:
     address: ":80"
+    # กำหนด middleware สำหรับ redirect เพื่อใช้กับทราฟฟิกทั้งหมดบน entry point นี้
     http:
       redirections:
         entryPoint:
-          to: websecure    # ให้ redirect ไปยัง entrypoint ชื่อ websecure (พอร์ต 443)
-          scheme: https    # โดยใช้ scheme เป็น https
-          permanent: true  # เป็นการ redirect แบบถาวร (HTTP 308)
+          to: websecure
+          scheme: https
+          permanent: true
   websecure:
     address: ":443"
 
@@ -26,7 +27,7 @@ providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false # ต้องเปิดใช้งานเซอร์วิสอย่างชัดเจนผ่าน labels
-    network: satang-dev-net # ใช้เน็ตเวิร์กกลางของเรา
+    network: omnisight-net # ใช้เน็ตเวิร์กกลางของเรา
 
 # ตั้งค่าการบันทึก log
 log:
