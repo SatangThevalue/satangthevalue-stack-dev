@@ -1,339 +1,261 @@
-# docker-compose.yml
-version: '3.9'
+version: "3.8"
 
 services:
-  # ============================================================================
-  # 1. GATEWAY
-  # ============================================================================
+  # 1. Service ของ Traefik
   traefik:
-    image: traefik:v3.0
-    container_name: ${COMPOSE_PROJECT_NAME}-traefik-gateway
+    image: "traefik:v3.0"
+    container_name: "traefik"
+    restart: unless-stopped
+    environment:
+      - DOMAIN=${DOMAIN}
+      - TZ=${TZ}
     command:
-      - "--configfile=/etc/traefik/traefik.yml"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--api.dashboard=true"
     ports:
       - "80:80"
       - "443:443"
+      - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ./infra/traefik/certs:/etc/traefik/certs:ro
+      - ./infra/traefik/dynamic:/etc/traefik/dynamic:ro
     networks:
-      - ${COMPOSE_PROJECT_NAME}-net
+      - backend
     labels:
-      # เปิดใช้งานให้ Traefik จัดการตัวเอง
       - "traefik.enable=true"
-      # Dashboard Router (แบบปลอดภัย)
-      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN}`)"
-      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
-      - "traefik.http.routers.traefik-dashboard.service=api@internal"
-      - "traefik.http.routers.traefik-dashboard.tls=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.service=api@internal"
 
-  # ============================================================================
-  # 2. การจัดการข้อมูลลับ (SECRETS MANAGEMENT)
-  # ============================================================================
-  vault:
-    image: hashicorp/vault:1.17
-    container_name: ${COMPOSE_PROJECT_NAME}-vault
+  # 2. Service ตัวอย่าง whoami
+  whoami:
+    image: "traefik/whoami"
+    container_name: "whoami-app"
+    restart: unless-stopped
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.services.whoami-app.loadbalancer.server.port=80"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.${DOMAIN}`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls=true"
+
+  # 3. Infisical Backend Service
+  infisical:
+    container_name: infisical-backend
+    image: infisical/infisical:latest
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - AUTH_SECRET=${AUTH_SECRET}
+      - DB_CONNECTION_URI=${INFISICAL_DB_CONNECTION_URI}
+      - REDIS_URL=redis://redis:6379
+      - SITE_URL=https://infisical.${DOMAIN}
+      - NODE_ENV=production
+      - ALLOW_INTERNAL_IP_CONNECTIONS=true
+      - INFISICAL_POSTGRES_USER=${INFISICAL_POSTGRES_USER}
+      - INFISICAL_POSTGRES_PASSWORD=${INFISICAL_POSTGRES_PASSWORD}
+      - INFISICAL_POSTGRES_DB=${INFISICAL_POSTGRES_DB}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.services.infisical-backend.loadbalancer.server.port=8080"
+      - "traefik.http.routers.infisical.rule=Host(`infisical.${DOMAIN}`)"
+      - "traefik.http.routers.infisical.entrypoints=websecure"
+      - "traefik.http.routers.infisical.tls=true"
+
+  # 4. Redis Caching Service
+  redis:
+    container_name: infisical-redis
+    image: redis:alpine
+    restart: unless-stopped
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=false"
+
+  # 5. PostgreSQL Database Service
+  db:
+    container_name: postgres-db
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=${TZ}
+      - INFISICAL_POSTGRES_DB=${INFISICAL_POSTGRES_DB}
+      - INFISICAL_POSTGRES_USER=${INFISICAL_POSTGRES_USER}
+      - INFISICAL_POSTGRES_PASSWORD=${INFISICAL_POSTGRES_PASSWORD}
+      - PREFECT_POSTGRES_USER=${PREFECT_POSTGRES_USER}
+      - PREFECT_POSTGRES_PASSWORD=${PREFECT_POSTGRES_PASSWORD}
+      - PREFECT_POSTGRES_DB=${PREFECT_POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - backups:/backups:rw
+      - ./infra/postgres/init-user-db.sh:/docker-entrypoint-initdb.d/init-user-db.sh:ro
+    networks:
+      - backend
+    healthcheck:
+      test: "pg_isready --username=${POSTGRES_USER} && psql --username=${POSTGRES_USER} --list"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # 6. Automated Database Backup Service
+  #  db-backup:
+  #    container_name: postgres-db-backup
+  #    image: prodrigestivill/postgres-backup-local
+  #    restart: unless-stopped
+  #    depends_on:
+  #      - db
+  #    environment:
+  #      - POSTGRES_HOST=db
+  #      - POSTGRES_DB=${POSTGRES_DB}
+  #      - POSTGRES_USER=${POSTGRES_USER}
+  #      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+  #      - SCHEDULE=${BACKUP_SCHEDULE}
+  #      - BACKUP_KEEP_DAYS=7
+  #      - BACKUP_KEEP_WEEKS=4
+  #      - BACKUP_KEEP_MONTHS=6
+  #    volumes:
+  #      - backups:/backups
+  #    networks:
+  #      - backend
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      - TZ=${TZ}
+      - DOMAIN=${DOMAIN}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
+    volumes:
+      - pgadmin:/var/lib/pgadmin
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.${DOMAIN}`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls=true"
+  prefect-migrate:
+    container_name: prefect-migrate
+    image: prefecthq/prefect:3-latest
+    depends_on:
+      db:
+        condition: service_healthy
+    command: prefect server database upgrade -y
+    environment:
+      - PREFECT_API_DATABASE_CONNECTION_URL=${PREFECT_API_DATABASE_CONNECTION_URL}
+      - PREFECT_API_DATABASE_TIMEOUT=600
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=false"
+
+  prefect-api:
+    container_name: prefect-api
+    image: prefecthq/prefect:3-latest
+    depends_on:
+      prefect-migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: prefect server start --host 0.0.0.0 --no-services
+    environment:
+      - PREFECT_UI_URL=${PREFECT_UI_URL}
+      - PREFECT_UI_API_URL=${PREFECT_UI_API_URL}
+      - PREFECT_UI_SERVE_BASE=${PREFECT_UI_SERVE_BASE}
+      - PREFECT_API_DATABASE_CONNECTION_URL=${PREFECT_API_DATABASE_CONNECTION_URL}
+      - PREFECT_API_DATABASE_MIGRATE_ON_START=${PREFECT_API_DATABASE_MIGRATE_ON_START}
+      - PREFECT_MESSAGING_BROKER=${PREFECT_MESSAGING_BROKER}
+      - PREFECT_MESSAGING_CACHE=${PREFECT_MESSAGING_CACHE}
+      - PREFECT_SERVER_EVENTS_CAUSAL_ORDERING=${PREFECT_SERVER_EVENTS_CAUSAL_ORDERING}
+      - PREFECT_SERVER_CONCURRENCY_LEASE_STORAGE=${PREFECT_SERVER_CONCURRENCY_LEASE_STORAGE}
+      - PREFECT_REDIS_MESSAGING_HOST=${PREFECT_REDIS_MESSAGING_HOST}
+      - PREFECT_REDIS_MpgadminESSAGING_PORT=${PREFECT_REDIS_MESSAGING_PORT}
     ports:
-      - "8200:8200" # เปิดเพื่อให้เข้าถึงผ่าน CLI โดยตรงได้หากต้องการ
-    environment:
-      - VAULT_POSTGRES_USER=${VAULT_POSTGRES_USER}
-      - VAULT_POSTGRES_PASSWORD=${VAULT_POSTGRES_PASSWORD}
-      - VAULT_POSTGRES_DB=${VAULT_POSTGRES_DB}
-      - VAULT_ADDR=http://127.0.0.1:8200
-    cap_add:
-      - IPC_LOCK
-    volumes:
-      - ./infra/vault/config/vault-config.hcl:/vault/config/vault-config.hcl
-      - vault-data:/vault/file
-    command: "server -config=/vault/config/vault-config.hcl"
+      - "4200"
     networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "vault status -format=json | jq -e '.initialized == true and .sealed == false'"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - backend
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.vault.rule=Host(`vault.${DOMAIN}`)"
-      - "traefik.http.routers.vault.entrypoints=websecure"
-      - "traefik.http.routers.vault.tls=true"
-      - "traefik.http.services.vault.loadbalancer.server.port=8200"
-
-  # ============================================================================
-  # 3. ส่วนจัดเก็บข้อมูล (DATA PERSISTENCE LAYER)
-  # ============================================================================
-  postgres:
-    image: postgres:16
-    container_name: ${COMPOSE_PROJECT_NAME}-postgres
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      # ส่งค่าของ Vault เข้าไปเพื่อให้สคริปต์ init.sql สามารถสร้าง user/db ได้
-      VAULT_POSTGRES_USER: ${VAULT_POSTGRES_USER}
-      VAULT_POSTGRES_PASSWORD: ${VAULT_POSTGRES_PASSWORD}
-      VAULT_POSTGRES_DB: ${VAULT_POSTGRES_DB}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./infra/postgres/initdb:/docker-entrypoint-initdb.d
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  adminer:
-    image: adminer:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-adminer
-    environment:
-      ADMINER_DEFAULT_SERVER: postgres
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.adminer.rule=Host(`adminer.${DOMAIN}`)"
-      - "traefik.http.routers.adminer.entrypoints=websecure"
-      - "traefik.http.routers.adminer.tls=true"
-      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
-
-  minio:
-    image: minio/minio:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_DEFAULT_BUCKETS: ${MINIO_DEFAULT_BUCKETS}
-    volumes:
-      - minio-data:/data
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    labels:
-      - "traefik.enable=true"
-      # Router สำหรับ Web UI Console
-      - "traefik.http.routers.minio-console.rule=Host(`minio.${DOMAIN}`)"
-      - "traefik.http.routers.minio-console.entrypoints=websecure"
-      - "traefik.http.routers.minio-console.tls=true"
-      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
-
-  # ============================================================================
-  # 4. ส่วน MLOPS และ AUTOMATION
-  # ============================================================================
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.14.1
-    container_name: ${COMPOSE_PROJECT_NAME}-mlflow
-    command: >
-      mlflow server
-      --host 0.0.0.0
-      --port 5000
-      --backend-store-uri postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      --default-artifact-root s3://${MINIO_DEFAULT_BUCKETS}/mlflow/
-    environment:
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_PORT}
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.mlflow.rule=Host(`mlflow.${DOMAIN}`)"
-      - "traefik.http.routers.mlflow.entrypoints=websecure"
-      - "traefik.http.routers.mlflow.tls=true"
-      - "traefik.http.services.mlflow.loadbalancer.server.port=5000"
-
-  prefect:
-    image: prefecthq/prefect:2-latest
-    container_name: ${COMPOSE_PROJECT_NAME}-prefect
-    command: prefect server start
-    environment:
-      - PREFECT_UI_URL=https://prefect.${DOMAIN}
-      - PREFECT_API_URL=https://prefect.${DOMAIN}/api
-      - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - "traefik.enable=true"
+      - "traefik.docker.network=backend" # บอก Traefik ให้ใช้ network นี้
+      # --- สร้าง Router ที่ชี้ไปที่ port 4200 (UI และ API) ---
       - "traefik.http.routers.prefect.rule=Host(`prefect.${DOMAIN}`)"
       - "traefik.http.routers.prefect.entrypoints=websecure"
       - "traefik.http.routers.prefect.tls=true"
-      - "traefik.http.services.prefect.loadbalancer.server.port=4200"
+      - "traefik.http.services.prefect-svc.loadbalancer.server.port=4200"
+      - "traefik.http.routers.prefect.service=prefect-svc"
 
-  label-studio:
-    image: heartexlabs/label-studio:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-label-studio
-    environment:
-      - LABEL_STUDIO_HOST=https://label-studio.${DOMAIN}
-      - MINIO_ENDPOINT=http://minio:9000
-      - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
-    volumes:
-      - label-studio-data:/label-studio/data
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
+  prefect-background:
+    container_name: prefect-background
+    image: prefecthq/prefect:3-latest
     depends_on:
-      - minio
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.label-studio.rule=Host(`label-studio.${DOMAIN}`)"
-      - "traefik.http.routers.label-studio.entrypoints=websecure"
-      - "traefik.http.routers.label-studio.tls=true"
-      - "traefik.http.services.label-studio.loadbalancer.server.port=8080"
-  
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: ${COMPOSE_PROJECT_NAME}-n8n
+      prefect-migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: prefect server services start
     environment:
-      - N8N_HOST=n8n.${DOMAIN}
-      - N8N_PROTOCOL=https
-      - NODE_ENV=production
-      - WEBHOOK_URL=https://n8n.${DOMAIN}/
-    volumes:
-      - n8n-data:/home/node/.n8n
+      - PREFECT_API_DATABASE_CONNECTION_URL=${PREFECT_API_DATABASE_CONNECTION_URL}
+      - PREFECT_API_DATABASE_MIGRATE_ON_START=${PREFECT_API_DATABASE_MIGRATE_ON_START}
+      - PREFECT_MESSAGING_BROKER=${PREFECT_MESSAGING_BROKER}
+      - PREFECT_MESSAGING_CACHE=${PREFECT_MESSAGING_CACHE}
+      - PREFECT_SERVER_EVENTS_CAUSAL_ORDERING=${PREFECT_SERVER_EVENTS_CAUSAL_ORDERING}
+      - PREFECT_SERVER_CONCURRENCY_LEASE_STORAGE=${PREFECT_SERVER_CONCURRENCY_LEASE_STORAGE}
+      - PREFECT_REDIS_MESSAGING_HOST=${PREFECT_REDIS_MESSAGING_HOST}
+      - PREFECT_REDIS_MESSAGING_PORT=${PREFECT_REDIS_MESSAGING_PORT}
     networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.n8n.rule=Host(`n8n.${DOMAIN}`)"
-      - "traefik.http.routers.n8n.entrypoints=websecure"
-      - "traefik.http.routers.n8n.tls=true"
-      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
-
-  jenkins:
-    image: jenkins/jenkins:lts-jdk17
-    container_name: ${COMPOSE_PROJECT_NAME}-jenkins
-    environment:
-      - JENKINS_USER=${JENKINS_ADMIN_USER}
-      - JENKINS_PASS=${JENKINS_ADMIN_PASSWORD}
-    volumes:
-      - jenkins-data:/var/jenkins_home
-      - /var/run/docker.sock:/var/run/docker.sock # Mount Docker socket เพื่อให้ Jenkins สั่งงาน Docker ได้
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.jenkins.rule=Host(`jenkins.${DOMAIN}`)"
-      - "traefik.http.routers.jenkins.entrypoints=websecure"
-      - "traefik.http.routers.jenkins.tls=true"
-      - "traefik.http.services.jenkins.loadbalancer.server.port=8080"
-
-  # ============================================================================
-  # 5. เซอร์วิสของแอปพลิเคชัน (ตัวอย่าง)
-  # ============================================================================
-  #api-gateway:
-  #  image: nginxdemos/hello:plain-text
-  #  container_name: ${COMPOSE_PROJECT_NAME}-api-gateway
-  #  networks:
-  #    - ${COMPOSE_PROJECT_NAME}-net
-  #  labels:
-  #    - "traefik.enable=true"
-  #    - "traefik.http.routers.api-gateway.rule=Host(`api.${DOMAIN}`)"
-  #    - "traefik.http.routers.api-gateway.entrypoints=websecure"
-  #    - "traefik.http.routers.api-gateway.tls=true"
-  #    - "traefik.http.services.api-gateway.loadbalancer.server.port=80"
-
-  #ml-service:
-  #  image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ FastAPI service ของคุณ
-  #  container_name: ${COMPOSE_PROJECT_NAME}-ml-service
-  #  environment:
-  #    - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-  #    - MINIO_ENDPOINT=minio:9000
-  #    - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-  #    - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
-  #    - MLFLOW_TRACKING_URI=http://mlflow:5000
-  #  networks:
-  #    - ${COMPOSE_PROJECT_NAME}-net
-  #  depends_on:
-  #    - postgres
-  #    - minio
-  #    - mlflow
-  #  labels:
-  #    - "traefik.enable=true"
-  #    - "traefik.http.routers.ml-service.rule=Host(`ml-api.${DOMAIN}`)"
-  #    - "traefik.http.routers.ml-service.entrypoints=websecure"
-  #    - "traefik.http.routers.ml-service.tls=true"
-  #    - "traefik.http.services.ml-service.loadbalancer.server.port=80"
-  
-  #frontend:
-  #  image: nginxdemos/hello:plain-text # แทนที่ด้วย image ของ Next.js service ของคุณ
-  #  container_name: ${COMPOSE_PROJECT_NAME}-frontend
-  #  environment:
-  #    - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
-  #  networks:
-  #    - ${COMPOSE_PROJECT_NAME}-net
-  #  labels:
-  #    - "traefik.enable=true"
-  #    - "traefik.http.routers.frontend.rule=Host(`app.${DOMAIN}`)"
-  #    - "traefik.http.routers.frontend.entrypoints=websecure"
-  #    - "traefik.http.routers.frontend.tls=true"
-  #    - "traefik.http.services.frontend.loadbalancer.server.port=80"
-
-  # ============================================================================
-  # 6. ส่วนตรวจสอบและสังเกตการณ์ (OBSERVABILITY STACK)
-  # ============================================================================
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.95.0
-    container_name: ${COMPOSE_PROJECT_NAME}-otel-collector
-    command: ["--config=/etc/otel-collector-config.yml"]
-    volumes:
-      - ./infra/opentelemetry/otel-collector-config.yml:/etc/otel-collector-config.yml
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-
-  jaeger:
-    image: jaegertracing/all-in-one:1.53
-    container_name: ${COMPOSE_PROJECT_NAME}-jaeger
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-    networks:
-      - ${COMPOSE_PROJECT_NAME}-net
-    depends_on:
-      - otel-collector
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.jaeger.rule=Host(`jaeger.${DOMAIN}`)"
-      - "traefik.http.routers.jaeger.entrypoints=websecure"
-      - "traefik.http.routers.jaeger.tls=true"
-      - "traefik.http.services.jaeger.loadbalancer.server.port=16686" # Port ของ Jaeger UI
-
-# ============================================================================
-# การตั้งค่าระดับบนสุด
-# ============================================================================
-networks:
-  ${COMPOSE_PROJECT_NAME}-net:
-    driver: bridge
-    name: ${COMPOSE_PROJECT_NAME}-net
-
+      - backend
+# Docker Volumes
 volumes:
-  postgres-data:
-    name: ${COMPOSE_PROJECT_NAME}-postgres-data
-  minio-data:
-    name: ${COMPOSE_PROJECT_NAME}-minio-data
-  label-studio-data:
-    name: ${COMPOSE_PROJECT_NAME}-label-studio-data
-  n8n-data:
-    name: ${COMPOSE_PROJECT_NAME}-n8n-data
-  jenkins-data:
-    name: ${COMPOSE_PROJECT_NAME}-jenkins-data
+  pg_data:
+    driver: local
+  redis_data:
+    driver: local
+  backups:
+    driver: local
+  pgadmin:
+    driver: local
+
+# Docker Network
+networks:
+  backend:
+    name: backend

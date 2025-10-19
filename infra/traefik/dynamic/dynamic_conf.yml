@@ -1,0 +1,9 @@
+# infra/traefik/dynamic/dynamic_conf.yml
+
+# ----------------------------------------------------
+# 1. การตั้งค่า TLS (ส่วนที่คุณมีอยู่แล้ว)
+# ----------------------------------------------------
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/local-cert.pem
+      keyFile: /etc/traefik/certs/local-key.pem

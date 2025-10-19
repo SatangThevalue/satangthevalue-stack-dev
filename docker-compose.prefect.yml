@@ -1,0 +1,118 @@
+#docker-compose.prefect.yml
+version: "3.8"
+
+services:
+  prefect-postgres:
+    image: postgres:18
+    container_name: prefect-postgres 
+    environment:
+      POSTGRES_USER: ${PREFECT_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${PREFECT_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${PREFECT_POSTGRES_DB}
+    volumes:
+      - postgres_prefect_data:/var/lib/postgresql/data
+    healthcheck:
+      test: "pg_isready --username=${PREFECT_POSTGRES_USER} && psql --username=${PREFECT_POSTGRES_USER} --list"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    networks:
+      - prefect
+    labels:
+      - "traefik.enable=false"
+
+  prefect-redis:
+    image: redis:alpine
+    container_name: prefect-redis 
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    networks:
+      - prefect
+    labels:
+      - "traefik.enable=false"
+
+  prefect-migrate:
+    container_name: prefect-migrate
+    image: prefecthq/prefect:3-latest
+    depends_on:
+      prefect-postgres:
+        condition: service_healthy
+    command: prefect server database upgrade -y
+    environment:
+      - PREFECT_API_DATABASE_CONNECTION_URL=${PREFECT_API_DATABASE_CONNECTION_URL}
+      - PREFECT_API_DATABASE_TIMEOUT=600
+    networks:
+      - prefect
+    labels:
+      - "traefik.enable=false"
+
+  prefect-api:
+    container_name: prefect-api
+    image: prefecthq/prefect:3-latest
+    depends_on:
+      prefect-migrate:
+        condition: service_completed_successfully
+      prefect-postgres:
+        condition: service_healthy
+      prefect-redis:
+        condition: service_started
+    command: prefect server start --host 0.0.0.0 --no-services
+    environment:
+      - PREFECT_UI_URL=${PREFECT_UI_URL}
+      - PREFECT_UI_API_URL=${PREFECT_UI_API_URL}
+      - PREFECT_UI_SERVE_BASE=${PREFECT_UI_SERVE_BASE}
+      - PREFECT_API_DATABASE_CONNECTION_URL=${PREFECT_API_DATABASE_CONNECTION_URL}
+      - PREFECT_API_DATABASE_MIGRATE_ON_START=${PREFECT_API_DATABASE_MIGRATE_ON_START}
+      - PREFECT_MESSAGING_BROKER=${PREFECT_MESSAGING_BROKER}
+      - PREFECT_MESSAGING_CACHE=${PREFECT_MESSAGING_CACHE}
+      - PREFECT_SERVER_EVENTS_CAUSAL_ORDERING=${PREFECT_SERVER_EVENTS_CAUSAL_ORDERING}
+      - PREFECT_SERVER_CONCURRENCY_LEASE_STORAGE=${PREFECT_SERVER_CONCURRENCY_LEASE_STORAGE}
+      - PREFECT_REDIS_MESSAGING_HOST=${PREFECT_REDIS_MESSAGING_HOST}
+      - PREFECT_REDIS_MESSAGING_PORT=${PREFECT_REDIS_MESSAGING_PORT}
+    ports:
+      - "4200"
+    networks:
+      - backend
+      - prefect
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend" # บอก Traefik ให้ใช้ network นี้
+      # --- สร้าง Router ที่ชี้ไปที่ port 4200 (UI และ API) ---
+      - "traefik.http.routers.prefect.rule=Host(`prefect.${DOMAIN}`)"
+      - "traefik.http.routers.prefect.entrypoints=websecure"
+      - "traefik.http.routers.prefect.tls=true"
+      - "traefik.http.services.prefect-svc.loadbalancer.server.port=4200"
+      - "traefik.http.routers.prefect.service=prefect-svc"
+
+  prefect-background:
+    container_name: prefect-background
+    image: prefecthq/prefect:3-latest
+    depends_on:
+      prefect-migrate:
+        condition: service_completed_successfully
+      prefect-postgres:
+        condition: service_healthy
+      prefect-redis:
+        condition: service_started
+    command: prefect server services start
+    environment:
+      - PREFECT_API_DATABASE_CONNECTION_URL=${PREFECT_API_DATABASE_CONNECTION_URL}
+      - PREFECT_API_DATABASE_MIGRATE_ON_START=${PREFECT_API_DATABASE_MIGRATE_ON_START}
+      - PREFECT_MESSAGING_BROKER=${PREFECT_MESSAGING_BROKER}
+      - PREFECT_MESSAGING_CACHE=${PREFECT_MESSAGING_CACHE}
+      - PREFECT_SERVER_EVENTS_CAUSAL_ORDERING=${PREFECT_SERVER_EVENTS_CAUSAL_ORDERING}
+      - PREFECT_SERVER_CONCURRENCY_LEASE_STORAGE=${PREFECT_SERVER_CONCURRENCY_LEASE_STORAGE}
+      - PREFECT_REDIS_MESSAGING_HOST=${PREFECT_REDIS_MESSAGING_HOST}
+      - PREFECT_REDIS_MESSAGING_PORT=${PREFECT_REDIS_MESSAGING_PORT}
+    networks:
+      - prefect
+
+volumes:
+  postgres_prefect_data:
+
+# Docker Network
+networks:
+  backend:
+    name: backend
+  prefect:
+    driver: bridge
