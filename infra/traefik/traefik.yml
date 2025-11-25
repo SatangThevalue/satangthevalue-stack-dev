@@ -33,6 +33,17 @@ api:
 
 # --- LOGS ---
 log:
-  level: INFO
+  level: DEBUG
   format: json
-  filePath: /var/log/traefik/traefik.log
+  #filePath: /var/log/traefik/traefik.log
+# 2. Access Log: บันทึกทุก HTTP Request (ใครเข้าเว็บไหน เมื่อไหร่) <--- ส่วนที่เพิ่มใหม่
+accessLog:
+  format: json
+  # filePath: /var/log/traefik/access.log
+  bufferingSize: 100 # เขียนลง disk เมื่อครบ 100 lines (ลด IO load)
+  filters:
+    statusCodes:
+      - "200-299"
+      - "400-599"
+    retryAttempts: true
+    minDuration: "10ms"

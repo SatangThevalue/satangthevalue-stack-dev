@@ -7,9 +7,9 @@ services:
     container_name: vault-server
     hostname: vault.${DOMAIN}
     restart: unless-stopped
-    #ports:
-    #  - "8200:8200"
-    #  - "8201:8201"
+    ports:
+      - "8200:8200"
+      - "8201:8201"
     environment:
       - TZ=${TZ}
       - DOMAIN=${DOMAIN}
