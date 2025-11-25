@@ -1,0 +1,54 @@
+# ./infra/loki/loki-config.yml
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+ingester:
+  lifecycler:
+    address: 127.0.0.1
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+    final_sleep: 0s
+  chunk_idle_period: 5m
+  chunk_retain_period: 1m
+  max_transfer_retries: 0
+
+# ⭐️ 1. ตั้งค่า Schema ให้ชี้ไปที่ Postgres และ S3 (MinIO)
+schema_config:
+  configs:
+    - from: 2020-10-24
+      # ⭐️ บอกให้ Index ไปที่ Postgres
+      store: postgres 
+      # ⭐️ บอกให้ Chunks ไปที่ S3 (MinIO)
+      object_store: s3
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+# ⭐️ 2. ตั้งค่าการเชื่อมต่อ
+storage_config:
+  # ⭐️ (A) ตั้งค่าการเชื่อมต่อ Postgres (สำหรับ Index)
+  postgres:
+    # (อ่านค่าจาก Environment Variables ของ Loki container)
+    # เราจะใช้ Service 'postgres-db' จากไฟล์ docker-compose.db.yml
+    connection_string: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-db:5432/${LOKI_DB_NAME}?sslmode=disable"
+
+  # ⭐️ (B) ตั้งค่าการเชื่อมต่อ S3/MinIO (สำหรับ Chunks)
+  s3:
+    # (อ่านค่าจาก Environment Variables ของ Loki container)
+    endpoint: "http://mlflow-minio:9000" # (ใช้ชื่อ service 'mlflow-minio' และ port 9000)
+    bucketnames: "loki-chunks" # (ต้องสร้าง Bucket นี้ใน MinIO ก่อน)
+    access_key_id: ${MINIO_ROOT_USER}
+    secret_access_key: ${MINIO_ROOT_PASSWORD}
+    s3forcepathstyle: true # (จำเป็นสำหรับ MinIO)
+    insecure: true         # (ใช้ http)
+
+# ⭐️ ตั้งค่า Retention Logs
+# (แนะนำให้ตั้งค่าน้อยๆ สำหรับทดสอบ)
+limits_config:
+  retention_period: 72h # เก็บ Log ไว้ 3 วัน

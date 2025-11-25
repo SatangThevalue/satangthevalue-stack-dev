@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # 1. Vault Server (Production Mode)
+  vault:
+    image: hashicorp/vault:1.21
+    container_name: vault-server
+    hostname: vault.${DOMAIN}
+    restart: unless-stopped
+    #ports:
+    #  - "8200:8200"
+    #  - "8201:8201"
+    environment:
+      - TZ=${TZ}
+      - DOMAIN=${DOMAIN}
+      - HOSTNAME=vault.${DOMAIN}
+      - VAULT_DB_USER=${POSTGRES_USER}
+      - VAULT_DB_PASSWORD=${POSTGRES_PASSWORD}
+      - VAULT_PG_CONNECTION_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-db:5432/vault?sslmode=disable
+      - VAULT_ADDR=https://127.0.0.1:8200
+      - VAULT_API_ADDR=https://vault.${DOMAIN}:8200
+      - VAULT_CLUSTER_ADDR=https://vault-server:8201
+    volumes:
+      - ./infra/vault/config/vault.hcl:/vault/config/vault.hcl:ro
+      #- ./infra/vault/certs:/vault/certs:ro
+      - ./infra/traefik/certs:/vault/certs:ro
+      - ./infra/vault/data:/vault/data
+    cap_add:
+      - IPC_LOCK
+    command: server
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.vault.rule=Host(`vault.${DOMAIN}`)"
+      - "traefik.http.routers.vault.entrypoints=websecure"
+      - "traefik.http.routers.vault.tls=true"
+      - "traefik.http.services.vault.loadbalancer.server.scheme=https"
+      - "traefik.http.services.vault.loadbalancer.server.port=8200"
+      - "traefik.http.services.vault.loadbalancer.serverstransport=vault-transport@file"
+
+  # 2. Vault Agent Sidecar (ตัวอย่าง)
+  # ในทางปฏิบัติ Service อื่นๆ (Prefect/MLflow) จะ mount volume จากตัวนี้
+  #vault-agent:
+  #  image: hashicorp/vault:1.21
+  #  container_name: vault-agent
+  #  restart: always
+  #  depends_on:
+  #    - vault
+  #  volumes:
+  #    - ./infra/vault/config/agent.hcl:/vault/config/agent.hcl:ro
+  #    - shared-certs:/vault/output # <--- แชร์ volume นี้
+  #    # ไฟล์ role_id และ secret_id ต้องสร้างหลังจาก init vault แล้ว
+  #    - ./infra/vault/config/role_id:/vault/config/role_id:ro
+  #    - ./infra/vault/config/secret_id:/vault/config/secret_id:ro
+  #    - ./infra/vault/certs/root_ca.crt:/etc/ssl/certs/vault-ca.pem:ro
+  #  environment:
+  #    VAULT_ADDR: 'https://vault-server:8200'
+  #    VAULT_CACERT: '/etc/ssl/certs/vault-ca.pem'
+  #  command: agent -config=/vault/config/agent.hcl
+volumes:
+  shared-secrets: # Volume นี้ Service อื่นจะมา Mount ไปใช้
+
+networks:
+  backend:
+    external: true

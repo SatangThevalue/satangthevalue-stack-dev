@@ -1,0 +1,89 @@
+# ./infra/otel/otel-collector-config.yml
+
+receivers:
+  # 1. รับ Traces และ Metrics จาก Traefik
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+  # 2. รับ Logs จากไฟล์ JSON ของ Traefik
+  filelog/traefik_app:
+    include: [ /var/log/traefik/traefik.log ]
+    start_at: end
+    operators:
+      - type: json_parser
+        timestamp:
+          # ⭐️ แก้ไข: บอกให้หา key 'time' จาก 'body' ⭐️
+          parse_from: body.time 
+          layout: '%Y-%m-%dT%H:%M:%S%z'
+          
+  filelog/traefik_access:
+    include: [ /var/log/traefik/access.log ]
+    start_at: end
+    operators:
+      - type: json_parser
+        timestamp:
+          # ⭐️ แก้ไข: บอกให้หา key 'time' จาก 'body' (เช่นกัน) ⭐️
+          parse_from: body.time
+          # (Access Log ใช้ 'time' field เดียวกันกับ Traefik Log)
+
+  # 3. รับ Metrics จาก Postgres Exporter
+  prometheus/postgres:
+    config:
+      scrape_configs:
+        - job_name: 'postgres-exporter'
+          scrape_interval: 15s
+          static_configs:
+            - targets: [ 'postgres-exporter:9412' ]
+            
+  # 4. รับ Metrics และ Logs จาก Docker
+  docker_stats:
+  dockerlogs:
+
+processors:
+  batch:
+
+exporters:
+  # 1. ส่ง Traces ไป Jaeger
+  jaeger:
+    endpoint: "jaeger:14250"
+    tls:
+      insecure: true
+
+  # 2. ส่ง Metrics ให้ Prometheus (มา Scrape)
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+
+  # 3. ส่ง Logs ไป Loki
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    tls:
+      insecure: true
+
+  # 4. ⭐️ แก้ไข: เปลี่ยน 'logging' เป็น 'debug' ⭐️
+  debug:
+    # 'verbosity' (normal, detailed, basic) ใช้แทน 'loglevel'
+    verbosity: detailed 
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      # ⭐️ แก้ไข: 'logging' -> 'debug'
+      exporters: [jaeger, debug]
+
+    metrics:
+      receivers: [otlp, prometheus/postgres, docker_stats]
+      processors: [batch]
+      # ⭐️ แก้ไข: 'logging' -> 'debug'
+      exporters: [prometheus, debug]
+
+    logs:
+      receivers: [filelog/traefik_app, filelog/traefik_access, dockerlogs]
+      processors: [batch]
+      # ⭐️ แก้ไข: 'logging' -> 'debug'
+      exporters: [loki, debug]

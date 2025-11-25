@@ -1,0 +1,21 @@
+# ./infra/prometheus/prometheus.yml
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # 1. ดึง Metrics จาก Prometheus เอง
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 2. ⭐️ ดึง Metrics ที่ OTEL Collector รวบรวมไว้ ⭐️
+  # (ซึ่งรวม Metrics จาก Traefik และ Postgres)
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8889']
+
+  # 3. ดึง Metrics จาก Loki
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']

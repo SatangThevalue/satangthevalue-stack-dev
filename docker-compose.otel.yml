@@ -1,0 +1,136 @@
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    restart: unless-stopped
+    networks:
+      - backend
+    ports:
+      - "4317:4317" # OTLP gRPC (สำหรับ Traefik)
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus metrics endpoint
+    volumes:
+      - ./infra/otel/otel-collector-config.yml:/etc/otelcol-contrib/config.yaml:ro
+      # ⭐️ Mount Log ของ Traefik เข้ามา (ReadOnly)
+      - traefik-logs:/var/log/traefik:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - jaeger
+      - loki
+      - postgres-db # (ต้องมี postgres-db จากไฟล์อื่น)
+    labels:
+      - "traefik.enable=false" # ไม่ต้องเปิดสู่ภายนอก
+
+  # --- 3. JAEGER (สำหรับ Tracing) ---
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    restart: unless-stopped
+    networks:
+      - backend
+    ports:
+      - "16686:16686" # Jaeger UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true # ⭐️ เปิดให้รับ OTLP
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.jaeger.rule=Host(`jaeger.${DOMAIN}`)"
+      - "traefik.http.routers.jaeger.entrypoints=websecure"
+      - "traefik.http.routers.jaeger.tls=true"
+      - "traefik.http.routers.jaeger.service=jaeger-svc"
+      - "traefik.http.services.jaeger-svc.loadbalancer.server.port=16686"
+
+  # --- 4. LOKI (สำหรับ Logs) ---
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+    environment:
+      - LOKI_DB_NAME=${LOKI_DB_NAME}
+      - LOKI_DB_USER=${LOKI_DB_USER}
+      - LOKI_DB_PASSWORD=${LOKI_DB_PASSWORD}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    depends_on:
+      - postgres-db # (ให้รอ Postgres)
+      - minio       # (ให้รอ MinIO)
+    networks:
+      - backend
+    ports:
+      - "3100:3100" # Loki API
+    volumes:
+      - ./infra/loki/loki-config.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.loki.rule=Host(`loki.${DOMAIN}`)"
+      - "traefik.http.routers.loki.entrypoints=websecure"
+      - "traefik.http.routers.loki.tls=true"
+      - "traefik.http.routers.loki.service=loki-svc"
+      - "traefik.http.services.loki-svc.loadbalancer.server.port=3100"
+
+  # --- 5. PROMETHEUS (สำหรับ Metrics) ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    networks:
+      - backend
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.prometheus.rule=Host(`prometheus.${DOMAIN}`)"
+      - "traefik.http.routers.prometheus.entrypoints=websecure"
+      - "traefik.http.routers.prometheus.tls=true"
+      - "traefik.http.routers.prometheus.service=prometheus-svc"
+      - "traefik.http.services.prometheus-svc.loadbalancer.server.port=9090"
+
+  # --- 6. GRAFANA (สำหรับ Dashboard) ---
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      - grafana-data:/var/lib/grafana
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.routers.grafana.service=grafana-svc"
+      - "traefik.http.services.grafana-svc.loadbalancer.server.port=3000"
+
+  # --- 7. POSTGRES EXPORTER (⭐️ เชื่อมต่อ Postgres ⭐️) ---
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter
+    restart: unless-stopped
+    networks:
+      - backend
+    environment:
+      - DATA_SOURCE_URI="postgres-db:5432/postgres?sslmode=disable" 
+      - DATA_SOURCE_USER=${POSTGRES_USER}
+      - DATA_SOURCE_PASS=${POSTGRES_PASSWORD}
+    labels:
+      - "traefik.enable=false" # ⭐️ ไม่ต้องเปิดสู่ภายนอก
+volumes:
+  traefik-logs:
+  loki-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  backend:
+    external: true
+  frontend:
+    external: true

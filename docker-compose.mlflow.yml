@@ -1,0 +1,74 @@
+services:
+  mlflow:
+      image: ghcr.io/mlflow/mlflow:${MLFLOW_VERSION}
+      container_name: mlflow-server
+      depends_on:
+        postgres-db:
+          condition: service_healthy
+        minio:
+          condition: service_healthy
+        create-bucket:
+          condition: service_completed_successfully
+      environment:
+        # Backend store URI built from vars
+        MLFLOW_BACKEND_STORE_URI: ${MLFLOW_BACKEND_STORE_URI}
+
+        # S3/MinIO settings
+        MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+        AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+        AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+        AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+        MLFLOW_S3_IGNORE_TLS: "true"
+
+        # Server host/port (ควรตั้งค่า MLFLOW_HOST เป็น 0.0.0.0)
+        MLFLOW_HOST: ${MLFLOW_HOST}
+        MLFLOW_PORT: ${MLFLOW_PORT}
+
+      command: >
+        /bin/bash -c "
+          pip install --no-cache-dir psycopg2-binary boto3 &&
+          mlflow server \
+            --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} \
+            --default-artifact-root ${MLFLOW_DEFAULT_ARTIFACT_ROOT} \
+            --host ${MLFLOW_HOST} \
+            --port ${MLFLOW_PORT}
+        "
+      # ports: <-- REMOVED
+      #   - "${MLFLOW_PORT}:${MLFLOW_PORT}"
+      networks: # <-- ADDED
+        - backend
+      healthcheck:
+        test:
+          [
+            "CMD",
+            "python",
+            "-c",
+            "import urllib.request; urllib.request.urlopen('http://localhost:${MLFLOW_PORT}/health')",
+          ]
+        interval: 10s
+        timeout: 5s
+        retries: 30
+      labels:
+        - "traefik.enable=true"
+        # 1. บอก Traefik ว่า service นี้อยู่ใน network 'backend'
+        - "traefik.docker.network=backend"
+
+        # 2. ตั้งค่า Router (กฎการเข้าถึง)
+        - "traefik.http.routers.mlflow.rule=Host(`mlflow.${DOMAIN}`)"
+        - "traefik.http.routers.mlflow.entrypoints=websecure"
+        
+        # 3. ตั้งค่า SSL
+        - "traefik.http.routers.mlflow.tls=true"
+        #- "traefik.http.routers.mlflow.tls.certresolver=vaultlocal"
+
+        # 4. ตั้งค่า Service (ชี้ไปที่ port ภายในของ MLflow)
+        - "traefik.http.routers.mlflow.service=mlflow-svc"
+        - "traefik.http.services.mlflow-svc.loadbalancer.server.port=${MLFLOW_PORT}"
+        
+        # 5. เพิ่มความปลอดภัย (บังคับ Login ด้วย Authelia และป้องกันด้วย Crowdsec)
+        #- "traefik.http.routers.mlflow.middlewares=authelia-auth@file,crowdsec-bouncer@file"
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

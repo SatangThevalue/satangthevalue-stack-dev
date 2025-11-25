@@ -1,0 +1,43 @@
+# config.yml
+tunnel: 18aea62d-978d-41c0-8645-400f721862bf # UUID ที่ได้จากขั้นตอนที่ 1
+credentials-file: /etc/cloudflared/18aea62d-978d-41c0-8645-400f721862bf.json
+
+# 2. Ingress Rules (กฎการรับ-ส่ง Traffic)
+# -----------------------------------------------------
+# เราจะชี้ทุก hostname ไปที่ service 'traefik'
+# ผ่าน HTTPS ที่ port 443 (ซึ่งตรงกับ entrypoint 'websecure' ของคุณ)
+ingress:
+
+  # --- 2.1 Traefik Dashboard ---
+  - hostname: traefik.${DOMAIN}
+    service: https://traefik:443
+    originRequest:
+      no-tls-verify: true # <--- สำคัญมาก: บอกให้ Tunnel เชื่อใจ SSL ของ Traefik
+
+  # --- 2.2 pgAdmin ---
+  - hostname: pgadmin.${DOMAIN}
+    service: https://traefik:443
+    originRequest:
+      no-tls-verify: true
+
+  # --- 2.3 Infisical ---
+  - hostname: infisical.${DOMAIN}
+    service: https://traefik:443
+    originRequest:
+      no-tls-verify: true
+
+  # --- 2.4 Prefect ---
+  - hostname: prefect.${DOMAIN}
+    service: https://traefik:443
+    originRequest:
+      no-tls-verify: true
+      
+  # --- 2.5 Whoami (Test) ---
+  - hostname: whoami.${DOMAIN}
+    service: https://traefik:443
+    originRequest:
+      no-tls-verify: true
+
+  # --- 2.6 กฎปิดท้าย ---
+  # ถ้าไม่ตรงกับ Hostname ไหนเลย ให้ trả về 404
+  - service: http_status:404

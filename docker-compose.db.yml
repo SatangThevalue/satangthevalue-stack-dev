@@ -1,0 +1,174 @@
+services:
+  postgres-db:
+    container_name: postgres-db
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=${TZ}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/postgres/backups:/backups
+    networks:
+      - backend
+    healthcheck:
+      test: "pg_isready --username=${POSTGRES_USER} && psql --username=${POSTGRES_USER} --list"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    labels:
+      - "traefik.enable=false" # ไม่เปิดให้เข้าจากภายนอก
+  postgres-db-backup:
+    container_name: postgres-db-backup
+    image: prodrigestivill/postgres-backup-local
+    restart: unless-stopped
+    depends_on:
+      - postgres-db
+    environment:
+      - POSTGRES_HOST=postgres-db
+      # ตั้งค่า POSTGRES_DB ให้เป็นค่าว่าง ("") 
+      # เพื่อสั่งให้ image นี้ใช้ pg_dumpall (backup ทุกฐานข้อมูล)
+      - POSTGRES_DB=
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - SCHEDULE=${BACKUP_SCHEDULE}
+      - BACKUP_KEEP_DAYS=7
+      - BACKUP_KEEP_WEEKS=4
+      - BACKUP_KEEP_MONTHS=6
+    volumes:
+      - ./infra/postgres/backups:/backups
+    labels:
+      - "traefik.enable=false"
+    healthcheck:
+      # คำสั่งที่ใช้ทดสอบ
+      # curl --fail จะ exit 1 ทันทีถ้า HTTP status ไม่ใช่ 2xx
+      test: ["CMD", "curl", "--fail", "http://postgres-db-backup:8080/status"]
+      # ตรวจสอบทุก 5 นาที
+      interval: 5m
+      # รอผลลัพธ์ไม่เกิน 10 วินาที
+      timeout: 10s
+      # ลอง 3 ครั้งก่อนจะ mark ว่า unhealthy
+      retries: 3
+      # รอ 1 นาทีหลังจาก container เริ่ม ก่อนจะเริ่มเช็คครั้งแรก
+      start_period: 1m
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      - TZ=${TZ}
+      - DOMAIN=${DOMAIN}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
+    restart: unless-stopped
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - backend
+    volumes:
+      - pgadmin:/var/lib/pgadmin
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.${DOMAIN}`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls=true"
+
+
+  # --- 1.3 Redis (Cache / Message Broker) ---
+  # ตัวกลางเก็บ Cache หรือส่งข้อความ (ใช้โดย Infisical และ Prefect)
+  redis:
+    container_name: redis
+    image: redis:alpine
+    restart: unless-stopped
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=false" # ไม่เปิดให้เข้าจากภายนอก
+  
+  minio:
+    image: minio/minio:latest
+    container_name: mlflow-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_API_PORT: 9000
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    #ports:
+    #  - "9000:9000"
+    #  - "9001:9001"
+    networks:
+      - backend
+    healthcheck:
+      # CHANGED: แก้ไข healthcheck ให้ชี้ไปที่ port API (9000)
+      test: ["CMD", "curl", "-f", "http://minio:${MINIO_API_PORT:-9000}/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+
+      # --- 1. สร้าง Services ภายใน Traefik ---
+      # Service ชี้ไปที่ S3 API (Port 9000)
+      - "traefik.http.services.minio-api.loadbalancer.server.port=9000"
+      # Service ชี้ไปที่ Console (Port 9001)
+      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+
+      # --- 2. Router สำหรับ S3 API ---
+      # (เช่น s3.yourdomain.com หรือ minio.yourdomain.com)
+      - "traefik.http.routers.minio-api.rule=Host(`minio.${DOMAIN}`)"
+      - "traefik.http.routers.minio-api.entrypoints=websecure"
+      - "traefik.http.routers.minio-api.tls=true"
+      #- "traefik.http.routers.minio-api.tls.certresolver=vaultlocal"
+      - "traefik.http.routers.minio-api.service=minio-api"
+      # (เราไม่ใส่ Authelia ที่นี่ เพราะ S3 clients/SDKs ใช้งานไม่เป็น)
+
+      # --- 3. Router สำหรับ Console (Web UI) ---
+      # (เช่น console.yourdomain.com หรือ minio-console.yourdomain.com)
+      - "traefik.http.routers.minio-console.rule=Host(`minio-console.${DOMAIN}`)"
+      - "traefik.http.routers.minio-console.entrypoints=websecure"
+      - "traefik.http.routers.minio-console.tls=true"
+      #- "traefik.http.routers.minio-console.tls.certresolver=vaultlocal"
+      - "traefik.http.routers.minio-console.service=minio-console"
+      # (สำคัญ!) ป้องกันหน้า Console ด้วย Authelia และ Crowdsec
+      #- "traefik.http.routers.minio-console.middlewares=authelia-auth@file,crowdsec-bouncer@file"
+
+  create-bucket:
+    image: minio/mc:latest
+    container_name: mlflow-create-bucket
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c '
+        mc alias set myminio http://${MINIO_HOST}:${MINIO_PORT} \
+          ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+        mc mb --ignore-existing myminio/${MINIO_BUCKET:-mlflow}
+      '
+    restart: "no"
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=false" # ไม่เปิดให้เข้าจากภายนอก
+
+volumes:
+  pg_data:
+  pgadmin:
+  redis_data:
+  minio-data:
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

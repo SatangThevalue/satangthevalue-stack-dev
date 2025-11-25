@@ -1,0 +1,62 @@
+# settings.yaml
+#
+# นี่คือไฟล์ตั้งค่าหลักของ Homepage
+# ควบคุมหน้าตา, layout, และการเชื่อมต่อต่างๆ
+
+# --- 1. General (ทั่วไป) ---
+title: "My Dashboard"      # ชื่อที่จะแสดงบน Tab Browser
+lang: "en"                  # ภาษา (en, th, ฯลฯ)
+# provider:
+#   autoUpdate: true        # อัปเดตข้อมูลอัตโนมัติ (เช่น สถานะ Docker)
+#   refreshInterval: 300000 # 5 นาที
+
+# --- 2. Layout (หน้าตา) ---
+layout:
+  # กำหนดชื่อไฟล์ CSS ที่จะใช้ (ต้องอยู่ใน /app/config/style.css)
+  # style: "style.css" 
+  
+  # แบ่งเป็น 3 คอลัมน์ (คุณสามารถเปลี่ยนเป็น 2, 4, auto)
+  columns: "3"
+  
+  # ซ่อน Header (ถ้าไม่ต้องการ)
+  # header: false 
+
+# --- 3. Theme (ธีม) ---
+# คุณสามารถเลือกธีมที่นี่ 
+# ดูธีมทั้งหมดได้ที่: https://gethomepage.dev/themes/
+theme: dark
+
+# --- 4. Connectivity (การตรวจสอบสถานะ) ---
+# ใช้สำหรับตรวจสอบว่า Service ออนไลน์หรือไม่
+# "status" จะใช้ HTTP GET (เร็วที่สุด)
+connectivity:
+  status: "get"
+
+# --- 5. Providers (ส่วนสำคัญ) ---
+# เปิดใช้งานการเชื่อมต่อกับระบบอื่น
+providers:
+  # เปิดใช้งาน Docker (สำคัญมากสำหรับ Stack ของเรา)
+  docker:
+    # ใช้ Socket ที่เรา Mount เข้ามา
+    socket: /var/run/docker.sock 
+    
+    # (ทางเลือก) กรอง Container ที่ต้องการแสดง
+    # filter: "label=homepage.group" 
+
+# --- 6. Widgets (วิดเจ็ต) ---
+# วิดเจ็ตที่แสดงบนหน้า Dashboard
+widgets:
+  - search:
+      provider: "google"
+      target: "_blank" # เปิดใน Tab ใหม่
+      
+  - datetime:
+      format:
+        dateStyle: "long" # "29 February 2024"
+        timeStyle: "medium" # "14:30:00"
+      
+  # - resources: # แสดง CPU/Memory (ต้องตั้งค่าใน docker-compose เพิ่ม)
+  #     label: "Server Stats"
+  #     cpu: true
+  #     memory: true
+  #     storage: "/"

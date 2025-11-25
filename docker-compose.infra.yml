@@ -1,0 +1,38 @@
+services:
+  # 1. Traefik (The Bridge)
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - DOMAIN=${DOMAIN}
+      - EMAIL=${EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infra/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./infra/traefik/config.yml:/etc/traefik/config.yml:ro
+      - ./infra/traefik/acme.json:/etc/traefik/acme.json
+      - ./infra/traefik/logs:/var/log/traefik
+      - ./infra/traefik/certs:/etc/traefik/certs:ro
+    networks:
+      - frontend # <-- CHANGED: เชื่อมต่อกับ Network ภายนอก
+      - backend # <-- CHANGED: เชื่อมต่อกับ Network ภายใน
+    labels:
+      # ... (Labels ของ Traefik Dashboard เหมือนเดิม) ...
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      #- "traefik.http.routers.traefik-dashboard.tls.certresolver=vaultlocal"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+volumes:
+  traefik-logs:
+
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

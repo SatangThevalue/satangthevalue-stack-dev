@@ -1,0 +1,32 @@
+# /home/satang-the-value/local-github/satangthevalue-stack-dev/infra/traefik/config.yml
+# (Dynamic Configuration)
+
+http:
+  serversTransports:
+    # ชื่อ Transport: vault-transport (ใช้สำหรับคุยกับ Backend ที่ชื่อ Vault)
+    vault-transport:
+      # กรณีที่ 1: ปิดการตรวจสอบ SSL (ถ้า Vault ใช้ Self-signed ที่เรายังไม่ได้ Trust)
+      insecureSkipVerify: true
+
+      # กรณีที่ 2: ถ้าต้องการเปิดตรวจสอบ (Production) และ Vault ใช้ CA เดียวกับที่เราสร้าง
+      # ให้ Uncomment บรรทัดด้านล่าง และชี้ไปที่ rootCA.crt
+      rootCAs:
+         - /etc/traefik/certs/rootCA.crt
+
+# --- ส่วนที่เพิ่มใหม่: ตั้งค่า SSL ให้กับเว็บของคุณ (TLS Termination) ---
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        # ใช้ไฟล์ server.crt (ที่ได้จากการ Sign server.csr ด้วย rootCA.key)
+        certFile: /etc/traefik/certs/server.crt
+        # ใช้ไฟล์ server.key (Private Key ของ Server)
+        keyFile: /etc/traefik/certs/server.key
+
+  # (Optional) ถ้าต้องการบังคับให้ Browser เชื่อถือ Root CA นี้เพื่อทำ mTLS (Client Auth)
+  #options:
+  #  default:
+  #    clientAuth:
+  #      caFiles:
+  #        - /etc/traefik/certs/rootCA.crt
+  #      clientAuthType: RequireAndVerifyClientCert
