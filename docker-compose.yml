@@ -10,8 +10,11 @@ include:
   - docker-compose.open-webui.yml
   - docker-compose.n8n.yml
   #- docker-compose.ollama.yml
-  #- docker-compose.chroma.yml
+  - docker-compose.chroma.yml
   - docker-compose.nginx-proxy-manager.yml
+  - docker-compose.portainer.yml
+  - docker-compose.code.yaml
+  - docker-compose.ddns.yml
 
 
 networks:

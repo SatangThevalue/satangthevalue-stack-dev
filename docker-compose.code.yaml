@@ -1,0 +1,34 @@
+services:
+  code-server:
+    image: lscr.io/linuxserver/code-server:latest
+    container_name: code-server
+    user: "1000:1000"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=${TZ}
+      - PASSWORD=${CODE_SERVER_PASSWORD} #optional
+      - PROXY_DOMAIN=code-server.${DOMAIN} #optional
+      - DEFAULT_WORKSPACE=/config/workspace #optional
+      - PWA_APPNAME=code-server #optional
+    volumes:
+      - ./infra/code-server/config:/config
+    #ports:
+    #  - 8443:8443
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      # เข้าใช้งานผ่าน https://code-server.โดเมนของคุณ.com
+      - "traefik.http.routers.code-server.rule=Host(`code-server.${DOMAIN}`)"
+      - "traefik.http.routers.code-server.entrypoints=websecure"
+      - "traefik.http.routers.code-server.tls=true"
+      # code-server ภายในคอนเทนเนอร์ใช้ Port 8443
+      - "traefik.http.services.code-server.loadbalancer.server.port=8443"
+    networks:
+      - backend
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

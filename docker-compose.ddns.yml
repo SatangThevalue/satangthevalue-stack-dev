@@ -1,0 +1,17 @@
+services:
+  
+  ddns:
+    image: oznu/cloudflare-ddns:latest
+    container_name: cloudflare-ddns
+    restart: always
+    environment:
+      - API_KEY=${CLOUDFLARE_API_KEY} # ใส่ Global API Key ของ Cloudflare
+      - EMAIL=${CLOUDFLARE_EMAIL} # ใส่อีเมล
+      - ZONE=${DOMAIN} # เช่น example.com
+      - SUBDOMAIN= # ชื่อ Subdomain ที่ต้องการ update (หรือปล่อยว่างถ้าจะ update root domain)
+      - PROXIED=false # ตั้งค่าเป็น true ถ้าต้องการใช้ Cloudflare Proxy
+      - TTL=1 # ตั้งค่า TTL เป็น 1 เพื่อให้ Cloudflare จัดการค่าอัตโนมัติ
+    volumes:
+      - ddns-data:/data
+    labels:
+      - "traefik.enable=false" # ไม่เปิดให้เข้าจากภายนอก

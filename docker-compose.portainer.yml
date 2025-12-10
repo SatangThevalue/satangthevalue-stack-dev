@@ -1,0 +1,32 @@
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # จำเป็นมาก: เพื่อให้ Portainer คุยกับ Docker ได้
+      - portainer_data:/data              # เก็บข้อมูล User/Password ไว้ที่นี่
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      # --- Router Configuration ---
+      # เข้าผ่าน https://portainer.โดเมนของคุณ.com
+      - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN_NAME}`)"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.tls=true"
+      
+      # --- Service Configuration ---
+      # Portainer ภายในทำงานที่ Port 9000
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+volumes:
+  portainer_data:
+    name: portainer_data
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

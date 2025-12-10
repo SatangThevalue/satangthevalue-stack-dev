@@ -17,31 +17,15 @@ services:
       
       # 2. การตั้งค่า ChromaDB (External)
       # ตั้งค่าให้ใช้ ChromaDB ภายนอกแทนตัวที่ฝังมา
-      - VECTOR_DB_URL=http://chromadb:8000
-      # --- RAG / EMBEDDING SETTINGS ---
-      # 1. บอกให้ใช้ Engine แบบ OpenAI (เพราะ LiteLLM ปลอมตัวเป็น OpenAI)
-      - RAG_EMBEDDING_ENGINE=openai
-
-      # 2. ชี้เป้าไปที่ LiteLLM แทนที่จะไป OpenAI จริง
-      - RAG_OPENAI_API_BASE_URL=http://litellm:4000
-      - RAG_OPENAI_API_KEY=sk-q9TsPVev8Hpl5v2oiBhJ6A
-
-      # 3. ระบุชื่อโมเดลที่ตั้งไว้ใน LiteLLM (ข้อ 2)
-      - RAG_EMBEDDING_MODEL=nomic-embed-text
-      
-      # (Optional) ตั้งค่าอื่นๆ เพื่อประสิทธิภาพ RAG
-      - RAG_TOP_K=5
-      - PDF_EXTRACT_IMAGES=False # ปิดเพื่อประหยัดแรงเครื่องถ้าไม่จำเป็น
-      
+      - CHROMA_API_URL=http://chromadb:8000
       # 3. การตั้งค่า MinIO (S3 Storage สำหรับ Uploads)
       # เปลี่ยน backend การเก็บไฟล์จาก local ไปเป็น S3
       - STORAGE_PROVIDER=s3
       - S3_ENDPOINT_URL=http://minio:9000
       - S3_ACCESS_KEY_ID=${MINIO_ROOT_USER}      # ต้องตรงกับ MinIO ด้านล่าง
       - S3_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}  # ต้องตรงกับ MinIO ด้านล่าง
-      - S3_BUCKET_NAME=openwebui-data    # *ต้องสร้าง Bucket นี้ใน MinIO ก่อนใช้งาน
+      - S3_BUCKET_NAME=openwebui-data    #ต้องสร้าง Bucket นี้ใน MinIO ก่อนใช้งาน
       - S3_REGION_NAME=us-east-1         # ค่า Default ของ MinIO
-
       - WEBUI_SECRET_KEY=${N8N_ENCRYPTION_KEY} # MINIO_ROOT_USERReuse Key หรือสร้างใหม่ก็ได้
       - TZ=${TZ}
       - OPENAI_API_BASE_URL=http://litellm:4000/v1
@@ -50,6 +34,10 @@ services:
       - ./infra/open-webui:/app/backend/data
     depends_on:
       - ollama
+      - chromadb
+      - minio
+      - redis
+      - litellm
     networks:
       - backend
     labels:
