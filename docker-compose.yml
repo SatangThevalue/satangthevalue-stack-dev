@@ -1,11 +1,17 @@
 
 include:
   - docker-compose.db.yml
-  - docker-compose.infra.yml
+  #- docker-compose.traefik.yml
   #- docker-compose.otel.yml
   #- docker-compose.vault.yml
-  - docker-compose.prefect.yml
-  - docker-compose.mlflow.yml
+  #- docker-compose.prefect.yml
+  #- docker-compose.mlflow.yml
+  - docker-compose.litellm.yml
+  - docker-compose.open-webui.yml
+  - docker-compose.n8n.yml
+  #- docker-compose.ollama.yml
+  #- docker-compose.chroma.yml
+  - docker-compose.nginx-proxy-manager.yml
 
 
 networks:

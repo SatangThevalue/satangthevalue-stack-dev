@@ -1,0 +1,30 @@
+services:
+  
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: always
+    volumes:
+      - ./infra/ollama:/root/.ollama
+    networks:
+      - backend
+    # หากมี GPU Nvidia ให้ uncomment บรรทัดด้านล่างนี้
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.ollama.rule=Host(`ollama.${DOMAIN}`)"
+      - "traefik.http.routers.ollama.entrypoints=websecure"
+      - "traefik.http.routers.ollama.tls=true"
+      - "traefik.http.services.ollama.loadbalancer.server.port=11434"
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

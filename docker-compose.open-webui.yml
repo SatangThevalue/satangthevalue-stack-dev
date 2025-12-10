@@ -1,0 +1,71 @@
+services:
+  
+# --------------------------------------------------------------------------------
+  # 4. Open WebUI (ChatGPT-like UI)
+  # --------------------------------------------------------------------------------
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: always
+    environment:
+      # เชื่อมต่อกับ Ollama ภายใน Network เดียวกัน
+      #- OLLAMA_BASE_URL=http://host.docker.internal:11434 # กรณีใช้ Ollama บนเครื่อง Host
+      - OLLAMA_BASE_URL=http://ollama:11434
+      # 1. การตั้งค่า Redis (Empty Password)
+      # รูปแบบ: redis://hostname:port/db_index
+      - REDIS_URL=redis://redis:6379/0 
+      
+      # 2. การตั้งค่า ChromaDB (External)
+      # ตั้งค่าให้ใช้ ChromaDB ภายนอกแทนตัวที่ฝังมา
+      - VECTOR_DB_URL=http://chromadb:8000
+      # --- RAG / EMBEDDING SETTINGS ---
+      # 1. บอกให้ใช้ Engine แบบ OpenAI (เพราะ LiteLLM ปลอมตัวเป็น OpenAI)
+      - RAG_EMBEDDING_ENGINE=openai
+
+      # 2. ชี้เป้าไปที่ LiteLLM แทนที่จะไป OpenAI จริง
+      - RAG_OPENAI_API_BASE_URL=http://litellm:4000
+      - RAG_OPENAI_API_KEY=sk-q9TsPVev8Hpl5v2oiBhJ6A
+
+      # 3. ระบุชื่อโมเดลที่ตั้งไว้ใน LiteLLM (ข้อ 2)
+      - RAG_EMBEDDING_MODEL=nomic-embed-text
+      
+      # (Optional) ตั้งค่าอื่นๆ เพื่อประสิทธิภาพ RAG
+      - RAG_TOP_K=5
+      - PDF_EXTRACT_IMAGES=False # ปิดเพื่อประหยัดแรงเครื่องถ้าไม่จำเป็น
+      
+      # 3. การตั้งค่า MinIO (S3 Storage สำหรับ Uploads)
+      # เปลี่ยน backend การเก็บไฟล์จาก local ไปเป็น S3
+      - STORAGE_PROVIDER=s3
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_ACCESS_KEY_ID=${MINIO_ROOT_USER}      # ต้องตรงกับ MinIO ด้านล่าง
+      - S3_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}  # ต้องตรงกับ MinIO ด้านล่าง
+      - S3_BUCKET_NAME=openwebui-data    # *ต้องสร้าง Bucket นี้ใน MinIO ก่อนใช้งาน
+      - S3_REGION_NAME=us-east-1         # ค่า Default ของ MinIO
+
+      - WEBUI_SECRET_KEY=${N8N_ENCRYPTION_KEY} # MINIO_ROOT_USERReuse Key หรือสร้างใหม่ก็ได้
+      - TZ=${TZ}
+      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - OPENAI_API_KEY=sk-DGp6DNKU3cwpQDKjFyIBhw  # กำหนด Key ตรงกับ LiteLLM
+    volumes:
+      - ./infra/open-webui:/app/backend/data
+    depends_on:
+      - ollama
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      # ใช้ Subdomain 'chat' หรือ 'ai' ตามชอบ
+      - "traefik.http.routers.openwebui.rule=Host(`webui.${DOMAIN}`)" 
+      - "traefik.http.routers.openwebui.entrypoints=websecure"
+      - "traefik.http.routers.openwebui.tls=true"
+      - "traefik.http.services.openwebui.loadbalancer.server.port=8080"
+      # WebUI ใช้ WebSocket เยอะ ควรใช้ Middleware เดียวกับ n8n
+      - "traefik.http.routers.openwebui.middlewares=n8n@docker"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

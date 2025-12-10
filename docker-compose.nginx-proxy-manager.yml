@@ -1,0 +1,45 @@
+services:
+  nginx-proxy-manager:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    ports:
+      # These ports are in format <host-port>:<container-port>
+      - '80:80' # Public HTTP Port
+      - '443:443' # Public HTTPS Port
+      - '81' # Admin Web Port
+      # Add any other Stream port you want to expose
+      # - '21:21' # FTP
+    environment:
+      - TZ = ${TZ}
+      - DOMAIN_NAME = ${DOMAIN}
+      # Postgres parameters:
+      - DB_POSTGRES_HOST = ${NPM_DB_POSTGRES_HOST}
+      - DB_POSTGRES_PORT = ${NPM_DB_POSTGRES_PORT}
+      - DB_POSTGRES_USER = ${NPM_DB_POSTGRES_USER}
+      - DB_POSTGRES_PASSWORD = ${NPM_DB_POSTGRES_PASSWORD}
+      - DB_POSTGRES_NAME = ${NPM_DB_POSTGRES_NAME}
+      # Uncomment this if IPv6 is not enabled on your host
+      # DISABLE_IPV6: 'true'
+      - INITIAL_ADMIN_EMAIL=${NPM_INITIAL_ADMIN_EMAIL}
+      - INITIAL_ADMIN_PASSWORD=${NPM_INITIAL_ADMIN_PASSWORD}
+    networks:
+      - frontend
+      - backend
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+    depends_on:
+      - postgres-db
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.services.npm.loadbalancer.server.port=81"
+      - "traefik.http.routers.npm.rule=Host(`npm.${DOMAIN}`)"
+      - "traefik.http.routers.npm.entrypoints=websecure"
+      - "traefik.http.routers.npm.tls=true"
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

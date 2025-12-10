@@ -1,0 +1,44 @@
+services:
+  
+# --------------------------------------------------------------------------------
+  # 5. LiteLLM (LLM Proxy)
+  # --------------------------------------------------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm
+    restart: always
+    command: "--config /app/config.yaml --port 4000 --num_workers 2 --detailed_debug"
+    environment:
+      - LITELLM_MASTER_KEY=sk-1234
+      - LITELLM_SALT_KEY=randomSuperSaltKeyDonotChange123
+      - TZ=${TZ}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres-db:5432/litellm
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587               # ใช้ Port 587 เพื่อรองรับ TLS (Secure)
+      - SMTP_USERNAME=${EMAIL}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_SENDER_EMAIL=${EMAIL}
+      # ตั้งค่า Redis ให้ LiteLLM รู้จัก (อ่านจาก Env ใน Docker ก็ได้ หรือใส่ตรงนี้ก็ได้)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - CHROMA_DB_URL=http://chroma:8000
+      - CHROMA_DB_COLLECTION_NAME=litellm-logs
+      - STORE_MODEL_IN_DB=true
+    volumes:
+      - ./infra/litellm/config.yaml:/app/config.yaml
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.litellm.rule=Host(`litellm.${DOMAIN}`)"
+      - "traefik.http.routers.litellm.entrypoints=websecure"
+      - "traefik.http.routers.litellm.tls=true"
+      - "traefik.http.services.litellm.loadbalancer.server.port=4000"
+
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

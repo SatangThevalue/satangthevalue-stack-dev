@@ -1,0 +1,16 @@
+model_list:
+  # --- OpenRouter ---
+  - model_name: OpenRouter-Claude-3.5 # <--- แยกชื่อให้ชัดเจนว่าตัวนี้เสียเงินผ่าน OpenRouter
+    litellm_params:
+      model: openrouter/anthropic/claude-3.5-sonnet
+      api_key: os.environ/OPENROUTER_API_KEY
+general_settings:
+  cache: true             # เปิดใช้งาน Cache
+  cache_type: redis-semantic  # เลือกโหมด Semantic (ต้องมี Embedding Model)
+# ถ้าใช้ Semantic Cache ต้องระบุ Embedding Model ด้วย
+litellm_settings:
+  redis_semantic_cache_embedding_model: "ollama/nomic-embed-text" # ตัวอย่างใช้ Ollama
+  redis_semantic_cache_score_threshold: 0.95 # ความเหมือน 95% ให้ถือว่าเป็นคำถามเดิม
+  set_verbose: True
+
+

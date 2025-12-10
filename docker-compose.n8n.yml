@@ -1,0 +1,92 @@
+services:
+  # --------------------------------------------------------------------------------
+  # 1. n8n (Service เดิมของคุณ)
+  # --------------------------------------------------------------------------------
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n
+    restart: always
+    command: "start"
+    user: "1000:1000"
+    environment:
+      - GENERIC_TIMEZONE=${N8N_GENERIC_TIMEZONE}
+      - TZ=${TZ}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres-db
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${N8N_POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${N8N_POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${N8N_POSTGRES_PASSWORD}
+      - N8N_HOST=n8n.${DOMAIN}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_TEMPLATES_ENABLED=true
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_ENDPOINT_WEBHOOK=webhook
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.${DOMAIN}/
+      - N8N_PUBLIC_API_SWAGGERUI_DISABLED=false
+      - N8N_PUBLIC_API_ENABLED=true
+      - N8N_PUBLIC_API_ENDPOINT=api
+      - N8N_PUSH_BACKEND=websocket
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=true
+      - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
+      - N8N_USER_MANAGEMENT_DISABLED=True
+      - N8N_PROXY_HOPS=1
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD="Test@132"
+    volumes:
+      - ./infra/n8n:/home/node/.n8n
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.n8n.rule=Host(`n8n.${DOMAIN}`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls=true"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+      # Middleware
+      - "traefik.http.middlewares.n8n.headers.SSLRedirect=true"
+      - "traefik.http.middlewares.n8n.headers.STSSeconds=315360000"
+      - "traefik.http.middlewares.n8n.headers.browserXSSFilter=true"
+      - "traefik.http.middlewares.n8n.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.n8n.headers.forceSTSHeader=true"
+      - "traefik.http.middlewares.n8n.headers.STSIncludeSubdomains=true"
+      - "traefik.http.middlewares.n8n.headers.STSPreload=true"
+      - "traefik.http.middlewares.n8n.headers.customRequestHeaders.X-Forwarded-Proto=https"
+      - "traefik.http.routers.n8n.middlewares=n8n@docker"
+
+  # --------------------------------------------------------------------------------
+  # 2. ChromaDB (Vector Database)
+  # --------------------------------------------------------------------------------
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: chroma
+    restart: always
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMOUS_TELEMETRY=FALSE
+    volumes:
+      - ./infra/chroma:/chroma/chroma
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=backend"
+      - "traefik.http.routers.chroma.rule=Host(`chroma.${DOMAIN}`)"
+      - "traefik.http.routers.chroma.entrypoints=websecure"
+      - "traefik.http.routers.chroma.tls=true"
+      - "traefik.http.services.chroma.loadbalancer.server.port=8000"
+      # หมายเหตุ: Chroma ไม่มี Auth ในตัว ควรเพิ่ม Middleware BasicAuth ใน Traefik หากเปิด Public
+  
+volumes:
+  n8n_data:
+
+networks:
+  frontend:
+    external: true
+  backend:
+    external: true

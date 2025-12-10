@@ -145,3 +145,10 @@ infra/vault/certs/*.crt
 infra/vault/certs/*.key
 infra/vault/certs/*.srl
 infra/vault/certs/*.csr
+infra/ollama/
+infra/chroma/data/
+infra/chroma/db/
+infra/litellm/models/
+infra/litellm/config.json
+infra/n8n/
+infra/open-webui/
